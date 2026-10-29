@@ -8,7 +8,17 @@ jobs:
     container: devkitpro/devkitppc:latest
     steps:
       - uses: actions/checkout@v4
-      - run: make 2>&1 | tee build.log; test -f boot.dol
+      - name: Build
+        run: |
+          make 2>&1 | tee build.log
+          if [ ! -f boot.dol ]; then
+            # surface the compiler errors as an annotation (one message, newlines encoded)
+            msg=$(grep -E -B2 -A3 "error|undefined reference" build.log | head -80 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Build failed::$msg"
+            exit 1
+          fi
+          w=$(grep -E "warning" build.log | head -40 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+          [ -n "$w" ] && echo "::warning title=Compiler warnings::$w" || true
       - run: $DEVKITPPC/bin/powerpc-eabi-size boot.elf | tee -a build.log
       - run: cp boot.dol racinglegends_v1.dol
       - uses: actions/upload-artifact@v4

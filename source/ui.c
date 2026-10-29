@@ -236,18 +236,6 @@ float ui_text_w(const char *s, float size)
     return w * k;
 }
 
-/* thick polyline joints: an octagon so the strokes meet with chamfered corners */
-static void joint(float x, float y, float r, uint32_t c)
-{
-    float px = x + r, py = y;
-    for (int i = 1; i <= 8; i++) {
-        float a = (float)i * (TAU / 8.0f) + TAU / 16.0f, qx = x + cosf(a) * r, qy = y + sinf(a) * r;
-        if (i == 1) { px = x + cosf(TAU / 16.0f) * r; py = y + sinf(TAU / 16.0f) * r; }
-        ui_tri(x, y, c, px, py, c, qx, qy, c);
-        px = qx; py = qy;
-    }
-}
-
 static void draw_text(const char *s, float x, float y, float size, uint32_t c)
 {
     if (!g_ready) font_init();
@@ -263,15 +251,27 @@ static void draw_text(const char *s, float x, float y, float size, uint32_t c)
         const float *p = &g_pts[g_off[ch] * 2];
         int n = g_cnt[ch];
         float lx = 0, ly = 0;
-        int have = 0;
+        int have = 0, pts = 0;
+        float h = th * 0.5f;
         for (int i = 0; i < n; i++) {
-            if (p[i * 2] < -50.0f) { have = 0; continue; }
+            if (p[i * 2] < -50.0f) {
+                if (pts == 1) ui_rect(lx - h, ly - h, th, th, c);        /* a dot */
+                have = 0; pts = 0; continue;
+            }
             float gx = p[i * 2] + sh, gy = p[i * 2 + 1];
             float X = cx + (gx + (6.0f - gy) * slant) * k, Y = y + gy * k;
-            if (have) ui_line(lx, ly, X, Y, th, c);
-            joint(X, Y, th * 0.5f, c);
-            lx = X; ly = Y; have = 1;
+            if (have) {
+                /* the stroke, extended by half its width at both ends (square caps that also fill the joints) */
+                float dx = X - lx, dy = Y - ly, l = sqrtf(dx * dx + dy * dy);
+                if (l > 1e-4f) {
+                    float ux = dx / l * h, uy = dy / l * h;
+                    float ax = lx - ux, ay = ly - uy, bx = X + ux, by = Y + uy;
+                    ui_quad(ax - uy, ay + ux, c, bx - uy, by + ux, c, bx + uy, by - ux, c, ax + uy, ay - ux, c);
+                }
+            }
+            lx = X; ly = Y; have = 1; pts++;
         }
+        if (pts == 1) ui_rect(lx - h, ly - h, th, th, c);
         cx += adv_of(ch) * k;
     }
 }
