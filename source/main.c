@@ -162,7 +162,7 @@ int plat_mesh_create(const RV *v, int n)
     if (dl_used + size <= DL_POOL) {
         u8 *buf = dl_pool + dl_used;
         DCInvalidateRange(buf, size);
-        GX_BeginDisplayList(buf, size);
+        GX_BeginDispList(buf, size);
         int i = 0;
         while (i < n) {
             int k = n - i;
@@ -176,7 +176,7 @@ int plat_mesh_create(const RV *v, int n)
             GX_End();
             i += k;
         }
-        u32 len = GX_EndDisplayList();
+        u32 len = GX_EndDispList();
         if (len > 0) {
             m->dl = buf; m->len = len;
             dl_used += (len + 31u) & ~31u;
