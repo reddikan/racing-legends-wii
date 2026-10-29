@@ -120,7 +120,7 @@ static void plan_canyon(void)
 static void plan_snow(void)
 {
     stands_at_start(0);
-    scatter(P_PINE, 8.5f, 4.0f, 95.0f, 0.6f, 21, 0.8f, 1.4f, 1);
+    scatter(P_PINE, 9.0f, 4.0f, 95.0f, 0.6f, 21, 0.8f, 1.4f, 1);
     scatter(P_ROCK, 18.0f, 4.0f, 95.0f, 0.2f, 22, 0.8f, 2.0f, 2);
     scatter(P_CABIN, 70.0f, 8.0f, 40.0f, 0.45f, 23, 1.0f, 1.0f, 0);
     scatter(P_SNOWMAN, 45.0f, 2.0f, 8.0f, 0.4f, 24, 1.0f, 1.0f, 0);

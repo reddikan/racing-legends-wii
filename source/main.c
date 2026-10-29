@@ -1,7 +1,7 @@
 /*
  * RACING LEGENDS - Nintendo Wii platform layer (devkitPPC + libogc + libfat).
  *
- *   video : 3D through GX - the track's static chunks are GPU display lists, cars / particles / glows are
+ *   video : 3D through GX - the track's static chunks are GPU display lists (in main memory), cars / particles / glows are
  *           sent each frame, the HUD is a 2D layer on top. Depth buffered, alpha / additive / 2x-multiply
  *           blending, a tilt-shift blur pass, 60 fps, 16:9 anamorphic or letterboxed 4:3
  *   input : Wii Classic Controller (in Wii Remote 1); a GameCube controller works too
@@ -134,7 +134,7 @@ static void video_init(void)
 /* ------------------------------------------------------------------ */
 /* static meshes: GPU display lists in MEM2                            */
 /* ------------------------------------------------------------------ */
-#define DL_POOL (20u * 1024u * 1024u)
+#define DL_POOL (12u * 1024u * 1024u)
 #define MAX_MESH 2048
 typedef struct { void *dl; u32 len; const RV *imm; int n; } Mesh;
 static Mesh meshes[MAX_MESH];
@@ -149,41 +149,46 @@ void plat_mesh_reset(void)
     dl_used = 0;
 }
 
+/* The lists are written byte for byte as the GPU reads them (the same stream GX_Begin / GX_Position3f32 /
+ * GX_Color1u32 would send): 0x90 | format = triangles, a 16-bit count, then x y z (f32) and RGBA8 per
+ * vertex, padded with NOPs to 32 bytes. Building them directly avoids redirecting the CPU FIFO. */
 int plat_mesh_create(const RV *v, int n)
 {
     if (nmesh >= MAX_MESH || n < 3) return -1;
-    if (!dl_pool) dl_pool = (u8 *)big_alloc(DL_POOL);
+    if (!dl_pool) {
+        /* main memory if there's room, MEM2 otherwise */
+        dl_pool = (u8 *)memalign(32, DL_POOL);
+        if (!dl_pool) dl_pool = (u8 *)big_alloc(DL_POOL);
+    }
     n -= n % 3;
-    /* 16 bytes per vertex, a 3-byte header per GX_Begin batch, padding */
     u32 batches = (u32)(n / 65520 + 1);
-    u32 size = ((u32)n * 16u + batches * 3u + 64u + 31u) & ~31u;
+    u32 size = ((u32)n * 16u + batches * 3u + 31u) & ~31u;
     Mesh *m = &meshes[nmesh];
     m->imm = NULL; m->dl = NULL; m->len = 0; m->n = n;
     if (dl_used + size <= DL_POOL) {
-        u8 *buf = dl_pool + dl_used;
-        DCInvalidateRange(buf, size);
-        GX_BeginDispList(buf, size);
+        u8 *buf = dl_pool + dl_used, *w = buf;
         int i = 0;
         while (i < n) {
             int k = n - i;
             if (k > 65520) k = 65520;
-            GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16)k);
+            *w++ = (u8)(GX_TRIANGLES | (GX_VTXFMT0 & 7));
+            *w++ = (u8)(k >> 8);
+            *w++ = (u8)(k & 255);
             for (int j = 0; j < k; j++) {
                 const RV *p = &v[i + j];
-                GX_Position3f32(p->x, p->y, p->z);
-                GX_Color1u32(p->c);
+                memcpy(w, &p->x, 4); memcpy(w + 4, &p->y, 4); memcpy(w + 8, &p->z, 4);   /* big-endian floats */
+                w[12] = (u8)(p->c >> 24); w[13] = (u8)(p->c >> 16); w[14] = (u8)(p->c >> 8); w[15] = (u8)p->c;
+                w += 16;
             }
-            GX_End();
             i += k;
         }
-        u32 len = GX_EndDispList();
-        if (len > 0) {
-            m->dl = buf; m->len = len;
-            dl_used += (len + 31u) & ~31u;
-            return nmesh++;
-        }
+        while ((u32)(w - buf) < size) *w++ = 0;       /* GX_NOP */
+        DCFlushRange(buf, size);
+        m->dl = buf; m->len = size;
+        dl_used += size;
+        return nmesh++;
     }
-    /* no room (or the list failed): keep a copy and draw it directly */
+    /* no room: keep a copy and draw it directly */
     RV *copy = (RV *)big_alloc(sizeof(RV) * (unsigned long)n);
     memcpy(copy, v, sizeof(RV) * (size_t)n);
     m->imm = copy;

@@ -43,14 +43,14 @@ void draw_logo(float cx, float y, float sc, float t)
         ui_rect_h(cx - 330 * sc + off, yy, 120 * sc, 2, 0xFFFFFF00u, 0xFFFFFF40u);
     }
     ui_begin(RM_ALPHA);
-    ui_text_weight(1.9f);
-    ui_text_sc("RACING", cx - 6 * sc, y, 44 * sc, WHITE);
-    ui_text_weight(2.0f);
+    ui_text_weight(1.45f);
+    ui_text_sc("RACING", cx - 8 * sc, y, 38 * sc, WHITE);
+    ui_text_weight(1.55f);
     float pulse = 0.85f + 0.15f * sinf(t * 2.0f);
-    ui_text_sc("LEGENDS", cx + 10 * sc, y + 54 * sc, 58 * sc, col_mix(0xFF9A2AFFu, YELLOW, pulse));
+    ui_text_sc("LEGENDS", cx + 8 * sc, y + 58 * sc, 52 * sc, col_mix(0xFF9A2AFFu, YELLOW, pulse));
     ui_text_weight(1.0f);
     /* chequered strip */
-    float w = 330 * sc, x0 = cx - w * 0.5f, yy = y + 126 * sc;
+    float w = 330 * sc, x0 = cx - w * 0.5f, yy = y + 128 * sc;
     for (int i = 0; i < 30; i++)
         for (int r = 0; r < 2; r++)
             ui_rect(x0 + (float)i * w / 30.0f, yy + (float)r * 5 * sc, w / 30.0f, 5 * sc, ((i + r) & 1) ? 0x101018E0u : 0xF4F4F4E0u);
@@ -420,18 +420,18 @@ static void garage_render(void)
     /* the car on a turntable */
     float yaw = g.t * 0.45f + 0.6f;
     int body = g.tab == 1 ? g.cursor : sv.body;
-    r3d_camera(9.0f, 5.2f, -1.0f, 0.6f, 0.6f, 0.4f, 40.0f);
+    r3d_camera(10.5f, 7.0f, -6.5f, 1.3f, -1.9f, 4.9f, 40.0f);
     r3d_mode(RM_OPAQUE);
     /* floor disc */
     const int N = 40;
     for (int i = 0; i < N; i++) {
         float a0 = (float)i / N * TAU, a1 = (float)(i + 1) / N * TAU;
         uint32_t ci = 0x2A3044FFu, co = 0x161A26FFu;
-        r3d_tri3(0, 0, 0, ci, cosf(a0) * 4.2f, 0, sinf(a0) * 4.2f, co, cosf(a1) * 4.2f, 0, sinf(a1) * 4.2f, co);
-        r3d_tri3(cosf(a0) * 4.2f, 0, sinf(a0) * 4.2f, 0x3AB8FFFFu, cosf(a1) * 4.2f, 0, sinf(a1) * 4.2f, 0x3AB8FFFFu,
-                 cosf(a1) * 4.35f, 0, sinf(a1) * 4.35f, 0x3AB8FFFFu);
-        r3d_tri3(cosf(a0) * 4.2f, 0, sinf(a0) * 4.2f, 0x3AB8FFFFu, cosf(a1) * 4.35f, 0, sinf(a1) * 4.35f, 0x3AB8FFFFu,
-                 cosf(a0) * 4.35f, 0, sinf(a0) * 4.35f, 0x3AB8FFFFu);
+        r3d_tri3(0, 0, 0, ci, cosf(a0) * 3.6f, 0, sinf(a0) * 3.6f, co, cosf(a1) * 3.6f, 0, sinf(a1) * 3.6f, co);
+        r3d_tri3(cosf(a0) * 3.6f, 0, sinf(a0) * 3.6f, 0x3AB8FFC0u, cosf(a1) * 3.6f, 0, sinf(a1) * 3.6f, 0x3AB8FFC0u,
+                 cosf(a1) * 3.7f, 0, sinf(a1) * 3.7f, 0x3AB8FFFFu);
+        r3d_tri3(cosf(a0) * 3.6f, 0, sinf(a0) * 3.6f, 0x3AB8FFFFu, cosf(a1) * 3.7f, 0, sinf(a1) * 3.7f, 0x3AB8FFFFu,
+                 cosf(a0) * 3.7f, 0, sinf(a0) * 3.7f, 0x3AB8FFFFu);
     }
     r3d_mode(RM_ALPHA);
     r3d_blob(0, 0.02f, 0, 2.0f, 3.0f, yaw, 0x000000A0u, 0x00000000u);
@@ -508,7 +508,7 @@ static void garage_render(void)
         }
     }
     /* stats */
-    float sx = VW - 250, sy = 300;
+    float sx = VW - 250, sy = 322;
     ui_slant(sx - 16, sy - 12, 240, 150, 8, 0x0C1020C8u);
     const char *sn[5] = { "TOP SPEED", "ACCELERATION", "HANDLING", "NITRO", "DRIFT" };
     for (int i = 0; i < 5; i++) stat_bar(sx, sy + (float)i * 27, 200, sn[i], st[i], nx[i]);

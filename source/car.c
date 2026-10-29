@@ -318,11 +318,11 @@ static uint32_t shade(const Shade *S, const float *n, int m)
         float sp = n[0] * S->half[0] + n[1] * S->half[1] + n[2] * S->half[2];
         sp = sp < 0 ? 0 : sp;
         sp *= sp; sp *= sp; sp *= sp;                    /* ^8 */
-        float k = (shiny == 2 ? 0.6f : 0.42f) * (S->night ? 0.5f : 1.0f);
+        float k = (shiny == 2 ? 0.55f : 0.3f) * (S->night ? 0.5f : 1.0f);
         r += sp * k * S->sunc[0] + sp * 0.1f; g += sp * k * S->sunc[1] + sp * 0.1f; b += sp * k * S->sunc[2] + sp * 0.1f;
         /* a cool sky reflection on upward faces (the "toy car lacquer" look) */
         float up = n[1] > 0 ? n[1] : 0;
-        r += up * 0.06f; g += up * 0.07f; b += up * 0.09f;
+        r += up * 0.03f; g += up * 0.035f; b += up * 0.05f;
     }
     return RGBA((int)(r * 255.0f), (int)(g * 255.0f), (int)(b * 255.0f), 255);
 }
