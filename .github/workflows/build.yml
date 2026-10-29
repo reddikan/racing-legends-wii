@@ -1,0 +1,35 @@
+name: Build racinglegends_v1.dol
+on: [push, workflow_dispatch]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitppc:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make 2>&1 | tee build.log; test -f boot.dol
+      - run: $DEVKITPPC/bin/powerpc-eabi-size boot.elf | tee -a build.log
+      - run: cp boot.dol racinglegends_v1.dol
+      - uses: actions/upload-artifact@v4
+        with:
+          name: racing-legends-wii
+          path: |
+            racinglegends_v1.dol
+            build.log
+            apps/
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: racing-legends-wii
+      - name: Publish the v1 download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view v1 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create v1 -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "RACING LEGENDS v1" --notes "Open racinglegends_v1.dol in Dolphin (Classic Controller), or copy apps/racinglegends to an SD card."
+          gh release upload v1 racinglegends_v1.dol build.log -R "$GITHUB_REPOSITORY" --clobber

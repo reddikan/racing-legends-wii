@@ -1,0 +1,6 @@
+*.o
+*.elf
+*.dol
+apps/
+build.log
+tools/out/

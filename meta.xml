@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>Racing Legends</name>
+  <coder>reddikan</coder>
+  <version>1.0</version>
+  <release_date>20261029</release_date>
+  <short_description>Top-down 3D drift racing</short_description>
+  <long_description>Drift, boost and upgrade your way to the top across five tracks - forest, canyon, snow, a neon harbor at night and a lantern-lit midnight rally. Classic Controller: R accelerate, L brake / drift, A nitro, B hop, X camera, Y horn.</long_description>
+  <ahb_access/>
+</app>
