@@ -20,7 +20,7 @@ export PATH := $(DEVKITPRO)/tools/bin:$(DEVKITPPC)/bin:$(PATH)
 
 TARGET  := boot
 SRCDIR  := source
-SRCS    := main game race hud menu car track scenery fx r3d ui audio
+SRCS    := main game race hud menu car track scenery fx r3d ui audio font_bebas
 OBJS    := $(addprefix $(SRCDIR)/,$(addsuffix .o,$(SRCS)))
 HDRS    := $(wildcard $(SRCDIR)/*.h)
 
