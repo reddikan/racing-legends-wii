@@ -84,7 +84,6 @@ static void draw_position(const Car *pl)
         ui_rect(48, y + 4, 4, 14, c->paint);
         ui_text(c->name, 58, y + 6, 10, me ? 0x101018FFu : WHITE);
         if (c->finished) ui_text_r("FIN", 196, y + 6, 9, me ? 0x101018FFu : 0x5AF27AFFu);
-        else if (c->drifting && !me) ui_text_r("DRIFT", 196, y + 6, 8, CYAN);
         y += 25;
         shown++;
     }
@@ -119,15 +118,15 @@ static void draw_speedo(const Car *pl)
     ui_ring(cx, cy, r + 8, 2, 0xFFFFFF22u);
     float a0 = PI * 0.75f, a1 = PI * 2.25f;
     float mph = pl->speed * MPS_TO_MPH;
-    float f = sat(mph / 160.0f);                         /* the dial runs 0 - 160 mph */
+    float f = sat(mph / 240.0f);                         /* the dial runs 0 - 240 mph */
     ui_arc(cx, cy, r - 7, r, a0, a1, 32, 0x2A3048FFu, 0x2A3048FFu);
-    /* ticks every 20 mph, and the 88 mark */
+    /* ticks every 30 mph, and the 88 mark */
     for (int i = 0; i <= 8; i++) {
         float a = a0 + (a1 - a0) * (float)i / 8.0f, ca = cosf(a), sa = sinf(a);
         ui_line(cx + ca * (r - 14), cy + sa * (r - 14), cx + ca * (r - 9), cy + sa * (r - 9), i % 2 ? 1.5f : 2.5f, 0xFFFFFF80u);
     }
     {
-        float a = a0 + (a1 - a0) * (88.0f / 160.0f), ca = cosf(a), sa = sinf(a);
+        float a = a0 + (a1 - a0) * (88.0f / 240.0f), ca = cosf(a), sa = sinf(a);
         ui_line(cx + ca * (r - 16), cy + sa * (r - 16), cx + ca * (r + 3), cy + sa * (r + 3), 3.0f, mph >= 88.0f ? 0xBFF4FFFFu : 0x3AD8FFFFu);
     }
     if (f > 0.005f) {
@@ -166,22 +165,6 @@ static void draw_speedo(const Car *pl)
     } else {
         ui_slant_h(nx + 3, ny + 3, (bw - 6) * pl->nitro, bh - 6, 5, 0x1A4A8AFFu, 0x2A7AC8FFu);
         ui_text_s("RECHARGING", nx + 4, ny - 20, 11, DIM);
-    }
-    /* drift meter while sliding */
-    if (pl->drifting) {
-        static const uint32_t TC[4] = { 0xFFFFFFFFu, 0x4AB8FFFFu, 0xFF9A2AFFu, 0xC860FFFFu };
-        float sx, sy;
-        if (r3d_project(pl->x, pl->y + 3.2f, pl->z, &sx, &sy)) {
-            char b2[24];
-            sprintf(b2, "%d", (int)pl->drift_pts);
-            uint32_t tc = TC[pl->drift_tier];
-            ui_text_sc(b2, sx, sy - 34, 16, tc);
-            float bw = 70;
-            float th[4] = { 0, 0.85f, 1.9f, 3.3f };
-            float fr = pl->drift_tier >= 3 ? 1.0f : sat((pl->drift_charge - th[pl->drift_tier]) / (th[pl->drift_tier + 1] - th[pl->drift_tier]));
-            ui_rrect(sx - bw * 0.5f, sy - 12, bw, 6, 3, 0x00000090u);
-            ui_rrect(sx - bw * 0.5f + 1, sy - 11, (bw - 2) * fr, 4, 2, pl->drift_tier >= 3 ? TC[3] : TC[pl->drift_tier + 1]);
-        }
     }
 }
 
@@ -360,35 +343,18 @@ static void speed_lines(float k, uint32_t col)
     ui_begin(RM_ALPHA);
 }
 
-/* 88 MPH: the number slams in with chromatic copies, a light bar sweeps across, the edges flash */
+/* 88 MPH: the screen edges flash blue (the rings and light streaks are in the world, race.c) */
 static void draw_88(void)
 {
     float t = g.mph88_t;
     if (t <= 0) return;
-    float in = smooth01(t * 7.0f), out = 1.0f - smooth01((t - 1.15f) * 2.5f);
-    float a = in * out;
-    float sc = 1.0f + (1.0f - smooth01(t * 5.0f)) * 1.4f;
-    float y = 96.0f - 26.0f * (sc - 1.0f);
-    /* the light bar */
-    float bar = smooth01(t * 3.0f);
     ui_begin(RM_ADD);
-    ui_rect_h(VW * 0.5f - 300 * bar, 112, 300 * bar, 3, 0x3AD8FF00u, col_a(0x9AE8FFFFu, a));
-    ui_rect_h(VW * 0.5f, 112, 300 * bar, 3, col_a(0x9AE8FFFFu, a), 0x3AD8FF00u);
-    ui_rect_h(VW * 0.5f - 300 * bar, 172, 300 * bar, 2, 0x3AD8FF00u, col_a(0x3A8AFFFFu, a));
-    ui_rect_h(VW * 0.5f, 172, 300 * bar, 2, col_a(0x3A8AFFFFu, a), 0x3AD8FF00u);
     /* the screen edges flash blue as it hits */
     float f = (1.0f - smooth01(t * 3.0f)) * 0.8f;
     ui_rect_h(0, 0, 160, VH, col_a(0x3A8AFFFFu, f), 0x3A8AFF00u);
     ui_rect_h(VW - 160, 0, 160, VH, 0x3A8AFF00u, col_a(0x3A8AFFFFu, f));
     ui_rect_v(0, 0, VW, 90, col_a(0x6AC8FFFFu, f * 0.7f), 0x6AC8FF00u);
-    float o = 3.0f + (1.0f - in) * 18.0f + (t < 0.5f ? 2.5f * sinf(t * 60.0f) : 0.0f);
-    ui_text_weight(1.6f);
-    ui_text_c("88 MPH", VW * 0.5f - o, y, 52 * sc, col_a(0x2AF0FFFFu, 0.75f * a));
-    ui_text_c("88 MPH", VW * 0.5f + o, y, 52 * sc, col_a(0x3A4AFFFFu, 0.75f * a));
     ui_begin(RM_ALPHA);
-    ui_text_sc("88 MPH", VW * 0.5f, y, 52 * sc, col_a(0xFFFFFFFFu, a));
-    ui_text_weight(1.0f);
-    if (t > 0.25f) ui_text_sc("SPEED BARRIER BROKEN", VW * 0.5f, 180, 13, col_a(0xBFEFFFFFu, a * smooth01((t - 0.25f) * 5.0f)));
 }
 
 static void draw_pause(void)
@@ -426,6 +392,7 @@ void hud_draw(void)
         float k = 0;
         if (pl->boost_t > 0) k = 0.55f + 0.45f * sat(g.boost_anim);
         if (g.mph88_t > 0) k = fmaxf(k, 1.0f - smooth01(g.mph88_t / 1.3f));
+        k = fmaxf(k, sat((pl->speed * MPS_TO_MPH - 115.0f) / 70.0f) * 0.4f);     /* always a hint of speed when flat out */
         speed_lines(k, pl->livery == LIVERY_SIGNATURE ? 0x6AB8FFFFu : 0xBFEFFFFFu);
         draw_88();
     }

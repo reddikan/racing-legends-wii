@@ -2,7 +2,7 @@
 <app version="1">
   <name>Racing Legends</name>
   <coder>reddikan</coder>
-  <version>2.0</version>
+  <version>3.0</version>
   <release_date>20261030</release_date>
   <short_description>Top-down 3D hover racing</short_description>
   <long_description>Drift, boost and upgrade your hover craft across five neon tracks - two of them at night. Classic Controller: A accelerate, R/ZR boost, L brake / drift, B hop, X camera, Y horn.</long_description>

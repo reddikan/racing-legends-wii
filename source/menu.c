@@ -630,9 +630,9 @@ static void help_render(void)
     ui_text_weight(1.6f);
     ui_text_s("HOW TO PLAY", 40, 22, 26, WHITE);
     ui_text_weight(1.0f);
-    const char *keys[9] = { "A", "R / ZR", "L / ZL", "L + STEER", "LEFT STICK", "B", "X", "Y", "+ / -" };
+    const char *keys[9] = { "A", "R / ZR", "L / ZL", "L + STEER", "LEFT STICK", "B", "X", "Y", "+" };
     const char *what[9] = { "ACCELERATE", "BOOST - UNLIMITED, RECHARGES AFTER EVERY USE", "BRAKE / REVERSE", "DRIFT - HOLD THROUGH THE CORNER",
-                            "STEER (OR D-PAD)", "HOP (HOP + L STARTS A DRIFT)", "CHANGE CAMERA", "HORN", "PAUSE / RESET CRAFT" };
+                            "STEER (OR D-PAD)", "HOP (HOP + L STARTS A DRIFT)", "CHANGE CAMERA", "HORN", "PAUSE" };
     for (int i = 0; i < 9; i++) {
         float y = 76 + (float)i * 30;
         ui_slant(40, y, 150, 24, 6, 0xFFD23AE0u);

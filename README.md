@@ -16,18 +16,18 @@ Glide anti-gravity craft along elevated neon decks, drift through the corners, f
 | **X** | change camera (follow / fixed top-down / close chase) |
 | **Y** | horn |
 | + | pause |
-| − | put your craft back on the track |
 | HOME | exit |
 
-A GameCube controller also works (A accelerate, R boost, L brake / drift, B hop, X camera, Y horn, START pause, Z reset).
+A GameCube controller also works (A accelerate, R boost, L brake / drift, B hop, X camera, Y horn, START pause).
 
 ## How it plays
 
 - **Boost** never runs out. Each use empties the gauge, which then recharges. The HUD shows **BOOST READY** when you can fire again. Drifting and slipstreaming behind a rival speed up the recharge, and the Recharge upgrade shortens it.
-- **Drifting** charges up as you slide: blue sparks, then orange, then purple. Let go of L for a mini-turbo. The bigger the drift, the bigger the kick.
+- **Drifting** carves you round the corner with the nose pointed at the apex. Push the stick into the turn to tighten the arc, or away to widen it. The sparks charge up blue, then orange, then purple. Let go of L for a mini-turbo: the longer the drift, the bigger the kick.
 - **Boost pads** on the straights give a quick burst of speed.
-- **88 MPH**: hit 88 and the screen lights up.
+- **88 MPH**: hit 88 and the world lights up around you.
 - **Rocket start**: press A just before the lights go green.
+- Rivals who fall behind you find extra pace, so a lead is never safe.
 - Finish in the **top 3** to unlock the next track. Every race pays credits, plus a drift bonus.
 
 ## The garage
@@ -69,7 +69,7 @@ Credits, upgrades, craft, paint, unlocked tracks, records and options save to `s
 
 With devkitPro installed, `make` builds `boot.dol` and an `apps/racinglegends/` folder for a real Wii's SD card.
 
-When pushed to GitHub, the Actions workflow builds the game in the devkitPro container. It publishes the result as `racinglegends_v2.dol` on the **v2** release.
+When pushed to GitHub, the Actions workflow builds the game in the devkitPro container. It publishes the result as `racinglegends_v3.dol` on the **v3** release.
 
 `sh tools/run_tests.sh shots|bots|reel|fx` runs the native test harness (a software renderer plus bot drivers). No Wii is needed.
 

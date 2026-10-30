@@ -26,9 +26,9 @@ const char *PAINT_NAME[NUM_PAINTS] = { "RALLY BLUE", "RACING RED", "SUNBURST", "
 
 void car_stats_from_levels(const uint8_t *lv, CarStats *st)
 {
-    st->vmax     = 38.0f + 3.0f * (float)lv[UP_ENGINE];       /* 106 .. 148 mph */
-    st->accel    = 13.0f + 1.8f * (float)lv[UP_TURBO];
-    st->grip     = 15.5f + 1.25f * (float)lv[UP_GRIP];
+    st->vmax     = 46.0f + 3.6f * (float)lv[UP_ENGINE];       /* 129 .. 179 mph (boosting: up to ~250) */
+    st->accel    = 17.0f + 2.4f * (float)lv[UP_TURBO];
+    st->grip     = 20.0f + 1.6f * (float)lv[UP_GRIP];
     st->recharge = 7.0f - 0.9f * (float)lv[UP_RECHARGE];       /* 7.0 .. 2.5 s */
     st->npow     = (float)lv[UP_BOOST];
     st->drift = 1.0f + 0.22f * (float)lv[UP_DRIFT];
@@ -751,8 +751,8 @@ static void car_step(Car *c, float dt, int racing)
         if (c->nitro >= 1.0f) { c->nitro = 1.0f; c->ev_ready = 1; }
     }
     float npow = c->st.npow;
-    float vmax = c->st.vmax * (c->offroad ? 0.9f : 1.0f);
-    float accel = c->st.accel * (c->offroad ? 0.9f : 1.0f);
+    float vmax = c->st.vmax * (c->offroad ? 0.9f : 1.0f) * (1.0f + c->rb);
+    float accel = c->st.accel * (c->offroad ? 0.9f : 1.0f) * (1.0f + c->rb * 1.5f);
     if (c->boost_t > 0) { vmax *= 1.22f + 0.035f * npow; accel += 18.0f + 3.2f * npow; c->boost_t -= dt; if (c->boost_t < 0) c->boost_t = 0; }
     if (c->mini_t > 0) { vmax *= 1.1f; accel += 12.0f; c->mini_t -= dt; if (c->mini_t < 0) c->mini_t = 0; }
     if (c->start_boost > 0) { accel += 14.0f; vmax *= 1.08f; c->start_boost -= dt; }
@@ -773,7 +773,7 @@ static void car_step(Car *c, float dt, int racing)
         }
         if (!in->drift) c->drift_latch = 0;
         if (in->brake > 0.05f && !c->drifting && !c->drift_latch) {
-            if (vf > 0.5f) vf -= 24.0f * in->brake * dt;
+            if (vf > 0.5f) vf -= 30.0f * in->brake * dt;
             else if (in->throttle < 0.1f) { vf -= 9.0f * dt; if (vf < -9.0f) vf = -9.0f; }
         }
         if (in->throttle < 0.02f && in->brake < 0.05f) vf -= vf * 0.35f * dt + signf(vf) * 0.6f * dt;
@@ -790,7 +790,7 @@ static void car_step(Car *c, float dt, int racing)
         c->drifting = 1;
         c->drift_dir = steer > 0 ? 1 : -1;
         c->drift_charge = 0; c->drift_tier = 0; c->drift_pts = 0; c->drift_t = 0; c->straight_t = 0;
-        c->w += -(float)c->drift_dir * 0.9f;
+        c->dang = fabsf(c->slip) < 0.3f ? fabsf(c->slip) : 0.3f;
     }
     if (c->drifting) {
         c->drift_t += dt;
@@ -801,40 +801,48 @@ static void car_step(Car *c, float dt, int racing)
     float ws_max = grip / (speed > 5.0f ? speed : 5.0f);
     if (ws_max > 2.6f) ws_max = 2.6f;
     float low = sat(speed / 3.0f);
-    float wt;
-    if (c->drifting) {
-        float wmax = ws_max * 1.6f;
-        float into = steer * (float)c->drift_dir;           /* +1 = steering into the drift */
-        float k = 0.62f + 0.42f * into;                       /* 0.2 .. 1.04 */
-        wt = -(float)c->drift_dir * wmax * k;
+    float vx = c->vx, vz = c->vz;
+    if (c->drifting && !airborne && vf > 0) {
+        /* a drift carves an arc: the craft travels round the corner on a line the stick tightens or widens,
+         * holding its speed, while the nose swings in and stays pointed at the apex */
+        float into = clampf(steer * (float)c->drift_dir, -1.0f, 1.0f);     /* +1 = steering into the drift */
+        float rate = ws_max * (0.95f + 0.75f * into);                     /* 0.2 .. 1.7 x the normal turn */
+        if (rate > 2.8f) rate = 2.8f;
+        /* holding it tight scrubs a little speed, like leaning on the brakes */
+        float sp = sqrtf(vx * vx + vz * vz) * (1.0f - (0.03f + 0.11f * fmaxf(into, 0.0f)) * dt);
+        float hv = atan2f(vx, vz) - (float)c->drift_dir * rate * dt;
+        vx = sinf(hv) * sp; vz = cosf(hv) * sp;
+        float dt_ang = 0.44f + 0.16f * into;                               /* ~16..35 degrees */
+        c->dang += (dt_ang - c->dang) * damp(c->drift_t < 0.25f ? 11.0f : 6.0f, dt);
+        float h1 = wrap_angle(hv - (float)c->drift_dir * c->dang);
+        c->w = wrap_angle(h1 - c->h) / dt;
+        c->h = h1;
     } else {
-        wt = -steer * ws_max * low * (vf < -0.5f ? -1.0f : 1.0f);
+        float wt = -steer * ws_max * low * (vf < -0.5f ? -1.0f : 1.0f);
+        if (airborne) wt *= c->drifting ? 0.9f : 0.5f;
+        if (airborne && c->drifting) wt = -(float)c->drift_dir * ws_max * (0.8f + 0.4f * clampf(steer * (float)c->drift_dir, -1, 1));
+        c->w += (wt - c->w) * damp(12.0f, dt);
+        c->h += c->w * dt;
+        c->h = wrap_angle(c->h);
+        if (!c->drifting) c->dang *= expf(-10.0f * dt);
     }
-    if (airborne) wt *= 0.5f;
-    c->w += (wt - c->w) * damp(c->drifting ? 7.0f : 12.0f, dt);
-    c->h += c->w * dt;
-    c->h = wrap_angle(c->h);
 
     /* lateral grip */
     sh = sinf(c->h); ch = cosf(c->h);
     fx = sh; fz = ch; rx = -ch; rz = sh;
-    float vx = c->vx, vz = c->vz;
-    if (!airborne) {
-        /* drive speed is kept along the new heading partially (the car "carves") */
+    if (!airborne && !c->drifting) {
+        /* the mag field pulls the travel back in line with the nose; a hover craft keeps most of its speed
+         * doing it, so coming out of a drift snaps straight instead of scrubbing off */
         float sp0 = sqrtf(vx * vx + vz * vz);
         vf = vx * fx + vz * fz; vl = vx * rx + vz * rz;
-        float lg = c->drifting ? 2.6f : 13.0f;
-        lg *= surf;
-        if (I->surface == SURF_SNOW && !c->drifting) lg *= 0.8f;
+        float lg = 13.0f * surf;
+        if (I->surface == SURF_SNOW) lg *= 0.85f;
         vl *= expf(-lg * dt);
         vx = fx * vf + rx * vl; vz = fz * vf + rz * vl;
-        if (c->drifting && vf > 0) {
-            /* a drift keeps its momentum: the slide scrubs only a little speed */
-            float sp1 = sqrtf(vx * vx + vz * vz);
-            float keep = sp0 * (1.0f - 0.05f * dt);
-            if (sp1 > 1e-3f && sp1 < keep) { vx *= keep / sp1; vz *= keep / sp1; }
-        }
+        float sp1 = sqrtf(vx * vx + vz * vz);
+        if (sp1 > 1e-3f && sp1 < sp0 && vf > 0) { float k = (sp1 + (sp0 - sp1) * 0.85f) / sp1; vx *= k; vz *= k; }
     }
+    vf = vx * fx + vz * fz; vl = vx * rx + vz * rz;
     c->vx = vx; c->vz = vz;
     c->speed = sqrtf(vx * vx + vz * vz);
     c->slip = atan2f(vl, fabsf(vf) + 0.5f);
@@ -976,6 +984,18 @@ static void collide(Car *a, Car *b)
 
 void cars_step(float dt, int racing)
 {
+    /* rivals who fall behind the player find a little extra; the leaders ease off only slightly */
+    const Car *pl = NULL;
+    for (int i = 0; i < ncars; i++) if (cars[i].is_player) pl = &cars[i];
+    for (int i = 0; i < ncars; i++) {
+        Car *c = &cars[i];
+        float want = 0;
+        if (pl && c->ai && !pl->finished) {
+            float gap = pl->progress - c->progress;              /* + = the rival is behind */
+            want = gap > 0 ? fminf(gap / 100.0f, 1.0f) * 0.11f : fmaxf(gap / 200.0f, -1.0f) * 0.025f;
+        }
+        c->rb += (want - c->rb) * fminf(1.0f, dt * 0.8f);
+    }
     for (int i = 0; i < ncars; i++) {
         Car *c = &cars[i];
         if (c->finished && c->is_player == 0 && !racing) {}
@@ -1016,7 +1036,7 @@ void car_ai_input(Car *c, float dt)
         float v = s->vline * gk;
         /* allow for the distance still available to brake */
         float d = (float)k * step;
-        float vb = sqrtf(v * v + 2.0f * 13.0f * d);
+        float vb = sqrtf(v * v + 2.0f * 16.0f * d);
         if (vb < vt) vt = vb;
     }
     {
@@ -1070,7 +1090,7 @@ void car_ai_input(Car *c, float dt)
     c->in.nitro = 0;
     c->ai_nitro_t -= dt;
     if (c->nitro >= 1.0f && c->ai_nitro_t <= 0 && vt > speed + 8.0f && fabsf(steer) < 0.2f) {
-        c->in.nitro = 1; c->ai_nitro_t = 1.0f + 6.0f * (1.0f - c->skill);
+        c->in.nitro = 1; c->ai_nitro_t = 0.3f + 3.0f * (1.0f - c->skill);
     }
     c->in.hop = 0;
 }

@@ -58,6 +58,8 @@ typedef struct {
     int   drifting, drift_dir, drift_tier, drift_latch;
     float drift_charge, drift_t, drift_pts, drift_total, drift_best, straight_t;
     float slip;                      /* slip angle (rad) */
+    float dang;
+    float rb;                        /* rivals: pace adjustment relative to the player (catch-up) */                      /* drift: how far the nose points into the corner (rad) */
     int   offroad;
     float wall_t, impact, scrape;    /* contact with the barriers */
     float rpm; int gear; float shift_t;

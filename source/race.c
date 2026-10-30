@@ -9,7 +9,7 @@
 
 static const char *AI_NAMES[14] = { "MAX VOLTA", "LUNA REYES", "KAI STORM", "ZOE BLAZE", "RICO DIAZ", "NINA FROST",
     "JET HARLOW", "SKYE RIVERA", "BRUNO KOVAC", "MIA TANAKA", "DUKE MORGAN", "IVY CHEN", "OTTO VANCE", "RAE NOVAK" };
-static const float AI_TIER[NUM_TRACKS] = { 0.3f, 1.3f, 2.1f, 3.0f, 3.6f };
+static const float AI_TIER[NUM_TRACKS] = { 1.0f, 2.3f, 3.2f, 4.0f, 4.6f };
 
 static Rng rr;
 
@@ -108,8 +108,8 @@ static void setup_ai(Car *c, int i, int track, int attract)
         lv[k] = (uint8_t)(l < 0 ? 0 : (l > UP_MAX ? UP_MAX : l));
     }
     car_stats_from_levels(lv, &c->st);
-    c->skill = 0.92f + 0.06f * (float)i / 7.0f + rng_r(&rr, -0.01f, 0.01f);
-    if (track == 0 && !attract) c->skill -= 0.02f;
+    c->skill = 0.95f + 0.045f * (float)i / 7.0f + rng_r(&rr, -0.005f, 0.005f);
+    if (track == 0 && !attract) c->skill -= 0.015f;
     c->ai = 1;
     c->lane = rng_r(&rr, -1.2f, 1.2f);
     c->ai_nitro_t = rng_r(&rr, 2.0f, 8.0f);
@@ -440,7 +440,6 @@ void race_update(const Input *in, float dt)
         else if (racing) car_ai_input(c, dt);
         if (c->is_player && c->finished) { c->in.nitro = 0; c->skill = 0.85f; }
     }
-    if (pl && g.phase == RP_RACE && (in->pressed & BTN_MINUS)) { respawn(pl); hud_popup("RESET", 0xFFFFFFFFu, 22); }
     if (pl && (in->pressed & BTN_X)) { sv.cam = (uint8_t)((sv.cam + 1) % NUM_CAMS); save_mark_dirty(); snd(SND_UI_MOVE, 0.5f, 1.2f, 0); }
 
     /* physics (two sub-steps for stability) */
@@ -488,7 +487,6 @@ void race_update(const Input *in, float dt)
         /* recovery */
         if (racing && (c->stuck_t > (c->ai ? 2.0f : 3.0f) || c->wrong_t > (c->ai ? 2.0f : 6.0f))) {
             respawn(c);
-            if (c->is_player) hud_popup("RESET", 0xFFFFFFFFu, 22);
         }
         car_effects(c, i, dt);
         car_sounds(c);
@@ -498,16 +496,6 @@ void race_update(const Input *in, float dt)
     hud_update(dt);
 
     if (pl && g.phase == RP_RACE) {
-        /* banked drift: popup */
-        static float last_total;
-        if (g.race_t < 0.1f) last_total = 0;
-        if (pl->drift_total > last_total + 1.0f) {
-            char buf[32];
-            snprintf(buf, sizeof buf, "DRIFT +%d", (int)(pl->drift_total - last_total));
-            uint32_t col = pl->drift_pts > 600 ? 0xC860FFFFu : (pl->drift_pts > 300 ? 0xFF9A2AFFu : 0x4AB8FFFFu);
-            hud_popup(buf, col, 22);
-            last_total = pl->drift_total;
-        }
         g.wrong_t = pl->wrong_t;
     }
     if (g.phase == RP_DONE && g.phase_t > 5.0f && !g.attract && g.state == ST_RACE) {
@@ -566,14 +554,14 @@ void race_camera(float dt, int snap)
     float dy = wrap_angle(want - g.cyaw);
     float yr = mode == CAM_CLOSE ? 3.2f : 2.2f;
     g.cyaw = snap ? want : wrap_angle(g.cyaw + dy * damp(yr, dt));
-    float sp = clampf(spd / 50.0f, 0, 1.2f);
+    float sp = clampf(spd / 62.0f, 0, 1.3f);
     float dist, height, fov;
     switch (mode) {
-    case CAM_CLOSE: dist = 15.0f + sp * 3.0f; height = 11.0f + sp * 2.5f; fov = 50.0f; break;
+    case CAM_CLOSE: dist = 14.0f + sp * 4.0f; height = 9.5f + sp * 2.5f; fov = 50.0f + sp * 8.0f; break;
     case CAM_FIXED: dist = 18.0f + sp * 4.0f; height = 40.0f + sp * 6.0f; fov = 40.0f; break;
-    default:        dist = 31.0f + sp * 4.0f; height = 24.0f + sp * 3.0f; fov = 27.0f; break;
+    default:        dist = 24.0f + sp * 6.0f; height = 17.0f + sp * 3.0f; fov = 30.0f + sp * 5.0f; break;
     }
-    if (c->boost_t > 0) fov += 6.0f + 6.0f * sat(g.boost_anim);
+    if (c->boost_t > 0) fov += 8.0f + 8.0f * sat(g.boost_anim);
     else if (c->mini_t > 0) fov += 3.0f;
     if (g.mph88_t > 0) fov += 7.0f * (1.0f - smooth01(g.mph88_t / 1.2f));
     float kk = snap ? 1.0f : damp(3.0f, dt);
@@ -591,6 +579,11 @@ void race_camera(float dt, int snap)
         g.cheight = lerpf(26.0f, height, smooth01(a));
     }
     float ex = g.look_x - sinf(yaw) * g.cdist, ez = g.look_z - cosf(yaw) * g.cdist, ey = g.cy + g.cheight;
+    {
+        /* a fine rumble at high speed */
+        float r = sat((spd - 40.0f) / 30.0f) * (c->boost_t > 0 ? 0.11f : 0.05f);
+        ex += sinf(g.t * 97.0f) * r; ey += sinf(g.t * 83.0f + 2.0f) * r;
+    }
     if (g.shake > 0) {
         float s = g.shake * g.shake * 0.7f;
         ex += sinf(g.t * 71.0f) * s; ey += sinf(g.t * 53.0f + 1.0f) * s * 0.6f; ez += cosf(g.t * 67.0f) * s;
