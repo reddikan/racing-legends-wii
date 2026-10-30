@@ -42,9 +42,10 @@ static void bot_input(Input *in, int drift_ok)
     c->ai = was; c->skill = sk; c->lane = ln;
     in->sx = c->in.steer;
     if (c->in.throttle > 0.5f) in->held |= BTN_A;
-    if (c->in.brake > 0.3f || (drift_ok && c->in.drift)) in->held |= BTN_L;
-    in->lt = (c->in.brake > 0.3f || (drift_ok && c->in.drift)) ? 1.0f : 0.0f;
-    if (c->in.nitro) in->pressed |= BTN_R;
+    if (c->in.brake > 0.3f) in->held |= BTN_Y;
+    if (drift_ok && c->in.lean < 0) in->held |= BTN_L;
+    if (drift_ok && c->in.lean > 0) in->held |= BTN_R;
+    if (c->in.nitro) in->pressed |= BTN_B;
 }
 
 /* a small software mixer that does what main.c does with ASND, for the preview video's soundtrack */
@@ -130,7 +131,7 @@ static void run_race(int track, int laps, const uint8_t *lv, int verbose, float 
         if (cars[0].offroad) { off_frames++; if (off_frames % 30 == 1 && getenv("DBG")) printf("    off: sample %d lat %.1f hw %.1f line %.1f speed %.1f drifting %d steer %.2f curv %.4f t %.1f\n", cars[0].sample, cars[0].lat, trk.s[cars[0].sample].hw, trk.s[cars[0].sample].line, cars[0].speed, cars[0].drifting, cars[0].in.steer, trk.s[cars[0].sample].curv, g.race_t); }
         if (getenv("DBG2") && g.race_t > 76.5f && g.race_t < 81.0f && frames % 6 == 0)
             printf("    t %.2f s %d lat %.1f line %.1f v %.1f vline %.1f steer %.2f drift %d boost %.2f mini %.2f imp %.2f\n", g.race_t, cars[0].sample, cars[0].lat,
-                   trk.s[cars[0].sample].line, cars[0].speed, trk.s[cars[0].sample].vline, cars[0].in.steer, cars[0].drifting, cars[0].boost_t, cars[0].mini_t, cars[0].impact);
+                   trk.s[cars[0].sample].line, cars[0].speed, trk.s[cars[0].sample].vline, cars[0].in.steer, cars[0].in.lean != 0, cars[0].boost_t, cars[0].mini_t, cars[0].impact);
         if (cars[0].drifting) drift_frames++;
         for (int q = 1; q < ncars; q++) if (cars[q].offroad) ai_off++;
     }
@@ -251,6 +252,33 @@ int main(int argc, char **argv)
             if (!gotb && g.boost_anim > 0.75f && g.boost_anim < 0.85f) { shot("fx_boost"); gotb = 1; }
         }
         printf("88 mph moments %d, boosts %d\n", n88, nb);
+        return 0;
+    }
+    if (!strcmp(mode, "strafe")) {
+        /* hold A down the start straight, then R alone, then L alone: the craft should slide sideways */
+        g.loading_track = 0; g.state = ST_LOADING; g.loading_frames = 0;
+        for (int i = 0; i < 4; i++) step(&in);
+        in.pressed = BTN_A; step(&in); in.pressed = 0;
+        while (g.state == ST_RACE && g.phase != RP_RACE) { memset(&in, 0, sizeof in); step(&in); }
+        memset(&in, 0, sizeof in);
+        if (!getenv("PACK")) ncars = 1;          /* alone on the track: no rivals to bump */
+        for (int i = 0; i < 150; i++) { in.held = BTN_A; bot_input(&in, 0); in.held |= BTN_A; in.held &= ~(BTN_L | BTN_R); step(&in); }
+        for (int k = 0; k < 2; k++) {
+            float l0 = cars[0].lat, v0 = cars[0].speed, h0 = cars[0].h;
+            for (int i = 0; i < 40; i++) { memset(&in, 0, sizeof in); in.held = BTN_A | (k ? BTN_L : BTN_R); step(&in);
+                if (i % 8 == 0) printf("   lat %.2f wall %.1f speed %.1f imp %.1f curv %.4f\n", cars[0].lat, trk.s[cars[0].sample].wr, cars[0].speed, cars[0].impact, trk.s[cars[0].sample].curv); }
+            printf("%s alone for 0.67 s: lateral %+.2f m, speed %.1f -> %.1f, heading change %.1f deg, strafe %.1f\n", k ? "L" : "R",
+                   cars[0].lat - l0, v0, cars[0].speed, (cars[0].h - h0) * 57.3f, cars[0].strafe);
+            for (int i = 0; i < 40; i++) { memset(&in, 0, sizeof in); in.held = BTN_A; bot_input(&in, 0); in.held |= BTN_A; in.held &= ~(BTN_L | BTN_R); step(&in); }
+        }
+        /* a turn from the same moment: full right stick, with and without R */
+        Car save = cars[0];
+        for (int k = 0; k < 2; k++) {
+            cars[0] = save;
+            float h0 = cars[0].h, v0 = cars[0].speed;
+            for (int i = 0; i < 24; i++) { memset(&in, 0, sizeof in); in.held = BTN_A | (k ? BTN_R : 0); in.sx = 1.0f; step(&in); }
+            printf("stick right%s for 0.4 s: heading %.1f deg, speed %.1f -> %.1f, lat %.1f\n", k ? " + R" : "    ", (cars[0].h - h0) * 57.3f, v0, cars[0].speed, cars[0].lat);
+        }
         return 0;
     }
     if (!strcmp(mode, "cmp")) {

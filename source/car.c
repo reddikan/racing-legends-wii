@@ -1,10 +1,10 @@
 /*
  * RACING LEGENDS - cars. See car.h.
  *
- * Handling is arcade: the heading turns at a rate limited by the tyres' grip, and the velocity is pulled
- * towards the heading by a lateral grip term. Holding L in a corner breaks the rear loose (low lateral grip,
- * more yaw), which keeps most of the speed; the longer and harder the drift, the bigger the mini-turbo and
- * the more nitro it banks when you let go.
+ * Handling is arcade and F-Zero-like: the heading turns at a rate limited by the mag grip (with a firm
+ * minimum), and the velocity is pulled towards the heading by a strong lateral grip term, so the craft goes
+ * where it points. L / R lean on the air brakes: with the stick the same way the turn bites much sharper;
+ * with the stick centred the craft strafes sideways.
  */
 #include "car.h"
 #include "track.h"
@@ -31,7 +31,7 @@ void car_stats_from_levels(const uint8_t *lv, CarStats *st)
     st->grip     = 20.0f + 1.6f * (float)lv[UP_GRIP];
     st->recharge = 7.0f - 0.9f * (float)lv[UP_RECHARGE];       /* 7.0 .. 2.5 s */
     st->npow     = (float)lv[UP_BOOST];
-    st->drift = 1.0f + 0.22f * (float)lv[UP_DRIFT];
+    st->lean = (float)lv[UP_AIRBRAKE];
 }
 
 /* ------------------------------------------------------------------ */
@@ -678,7 +678,7 @@ void car_place(Car *c, float dist, float lat)
     c->air = 0; c->vy = 0; c->pitch = c->roll = c->susp = 0;
     c->sample = k;
     c->lat = lat; c->along = 0;
-    c->drifting = 0; c->drift_charge = 0; c->drift_tier = 0;
+    c->drifting = 0; c->strafe = 0; c->lean_vis = 0;
     c->boost_t = c->mini_t = 0;
     c->stuck_t = c->wrong_t = 0;
     c->rpm = 0.15f; c->gear = 1;
@@ -692,26 +692,10 @@ static void update_engine(Car *c, float dt, float vmax_eff)
     float target = 0.22f + 0.7f * sat(v) + 0.12f * c->in.throttle;
     if (c->boost_t > 0) target += 0.18f;
     else if (c->mini_t > 0) target += 0.08f;
-    if (c->drifting) target += 0.05f;
+    if (c->in.lean != 0) target += 0.04f;
     target = clampf(target, 0.15f, 1.2f);
     c->rpm += (target - c->rpm) * damp(c->in.throttle > 0.5f ? 5.0f : 3.0f, dt);
     c->gear = 1;
-}
-
-static void drift_end(Car *c)
-{
-    if (!c->drifting) return;
-    c->drifting = 0;
-    c->drift_latch = c->in.drift;          /* still holding L: don't slam on the brakes */
-    if (c->drift_tier > 0) {
-        const float mt[4] = { 0, 0.55f, 0.95f, 1.45f }, nb[4] = { 0, 0.18f, 0.35f, 0.6f };
-        c->mini_t = fmaxf(c->mini_t, mt[c->drift_tier]);
-        if (c->boost_t <= 0) c->nitro = fminf(1.0f, c->nitro + nb[c->drift_tier] * 0.5f * (0.8f + 0.2f * c->st.drift));
-        c->ev_boost = c->drift_tier;
-    }
-    c->drift_total += c->drift_pts * (1.0f + 0.5f * (float)c->drift_tier);
-    if (c->drift_pts > c->drift_best) c->drift_best = c->drift_pts;
-    c->drift_charge = 0; c->drift_tier = 0;
 }
 
 static void car_step(Car *c, float dt, int racing)
@@ -720,7 +704,7 @@ static void car_step(Car *c, float dt, int racing)
     CarInput *in = &c->in;
     if (!racing) {
         /* on the grid: held in place by the start clamps (no creeping, and never backwards) */
-        in->steer = 0; in->drift = 0; in->nitro = 0; in->hop = 0;
+        in->steer = 0; in->lean = 0; in->nitro = 0; in->hop = 0;
         c->vx = c->vz = 0; c->w = 0; c->speed = 0; c->slip = 0;
         c->steer_vis *= 0.9f;
         return;
@@ -760,7 +744,7 @@ static void car_step(Car *c, float dt, int racing)
 
     /* drive */
     if (!airborne) {
-        if (in->throttle > 0.02f && !(in->brake > 0.5f && vf < 1.0f && !c->drifting)) {
+        if (in->throttle > 0.02f && !(in->brake > 0.5f && vf < 1.0f)) {
             if (vf < vmax) {
                 float r = vf / vmax;
                 float a = accel * (1.0f - r * r * 0.92f) * in->throttle;
@@ -771,8 +755,7 @@ static void car_step(Car *c, float dt, int racing)
                 vf -= (vf - vmax) * 1.8f * dt;
             }
         }
-        if (!in->drift) c->drift_latch = 0;
-        if (in->brake > 0.05f && !c->drifting && !c->drift_latch) {
+        if (in->brake > 0.05f) {
             if (vf > 0.5f) vf -= 30.0f * in->brake * dt;
             else if (in->throttle < 0.1f) { vf -= 9.0f * dt; if (vf < -9.0f) vf = -9.0f; }
         }
@@ -783,79 +766,51 @@ static void car_step(Car *c, float dt, int racing)
         c->vz = fz * vf + rz * vl;
     }
 
-    /* drifting: L in a corner at speed (a hop lets it start slower) */
+    /* steering: a hover craft turns at a rate the mag grip allows, never less than a firm minimum, and
+     * answers the stick quickly - "locked in" */
     float steer = in->steer;
-    float fs = fabsf(steer);
-    if (!c->drifting && !c->drift_latch && in->drift && fs > 0.3f && vf > (airborne ? 8.0f : 12.0f)) {
-        c->drifting = 1;
-        c->drift_dir = steer > 0 ? 1 : -1;
-        c->drift_charge = 0; c->drift_tier = 0; c->drift_pts = 0; c->drift_t = 0; c->straight_t = 0;
-        c->dang = fabsf(c->slip) < 0.3f ? fabsf(c->slip) : 0.3f;
-    }
-    if (c->drifting) {
-        c->drift_t += dt;
-        if (!in->drift || vf < 7.0f) drift_end(c);
-    }
-
-    /* steering */
-    float ws_max = grip / (speed > 5.0f ? speed : 5.0f);
-    if (ws_max > 2.6f) ws_max = 2.6f;
+    float lean = clampf(in->lean, -1.0f, 1.0f);
+    float ws_max = grip * 1.1f / (speed > 5.0f ? speed : 5.0f);
+    if (ws_max < 0.95f) ws_max = 0.95f;
+    if (ws_max > 2.4f) ws_max = 2.4f;
     float low = sat(speed / 3.0f);
-    float vx = c->vx, vz = c->vz;
-    if (c->drifting && !airborne && vf > 0) {
-        /* a drift carves an arc: the craft travels round the corner on a line the stick tightens or widens,
-         * holding its speed, while the nose swings in and stays pointed at the apex */
-        float into = clampf(steer * (float)c->drift_dir, -1.0f, 1.0f);     /* +1 = steering into the drift */
-        float rate = ws_max * (0.95f + 0.75f * into);                     /* 0.2 .. 1.7 x the normal turn */
-        if (rate > 2.8f) rate = 2.8f;
-        /* holding it tight scrubs a little speed, like leaning on the brakes */
-        float sp = sqrtf(vx * vx + vz * vz) * (1.0f - (0.03f + 0.11f * fmaxf(into, 0.0f)) * dt);
-        float hv = atan2f(vx, vz) - (float)c->drift_dir * rate * dt;
-        vx = sinf(hv) * sp; vz = cosf(hv) * sp;
-        float dt_ang = 0.44f + 0.16f * into;                               /* ~16..35 degrees */
-        c->dang += (dt_ang - c->dang) * damp(c->drift_t < 0.25f ? 11.0f : 6.0f, dt);
-        float h1 = wrap_angle(hv - (float)c->drift_dir * c->dang);
-        c->w = wrap_angle(h1 - c->h) / dt;
-        c->h = h1;
-    } else {
-        float wt = -steer * ws_max * low * (vf < -0.5f ? -1.0f : 1.0f);
-        if (airborne) wt *= c->drifting ? 0.9f : 0.5f;
-        if (airborne && c->drifting) wt = -(float)c->drift_dir * ws_max * (0.8f + 0.4f * clampf(steer * (float)c->drift_dir, -1, 1));
-        c->w += (wt - c->w) * damp(12.0f, dt);
-        c->h += c->w * dt;
-        c->h = wrap_angle(c->h);
-        if (!c->drifting) c->dang *= expf(-10.0f * dt);
-    }
+    /* L / R: leaning on the air brakes. With the stick the same way it bites the turn much sharper (and
+     * scrubs a little speed); with the stick centred (or the other way) it strafes the craft sideways */
+    int turning_lean = lean != 0 && fabsf(steer) > 0.25f && (steer > 0) == (lean > 0);
+    float lk = 1.0f;
+    if (turning_lean) lk = 1.55f + 0.09f * c->st.lean;
+    float wt = -steer * ws_max * low * lk * (vf < -0.5f ? -1.0f : 1.0f);
+    if (airborne) wt *= 0.5f;
+    c->w += (wt - c->w) * damp(turning_lean ? 14.0f : 16.0f, dt);
+    c->h += c->w * dt;
+    c->h = wrap_angle(c->h);
+    c->lean_vis += (lean - c->lean_vis) * damp(10.0f, dt);
 
     /* lateral grip */
     sh = sinf(c->h); ch = cosf(c->h);
     fx = sh; fz = ch; rx = -ch; rz = sh;
-    if (!airborne && !c->drifting) {
-        /* the mag field pulls the travel back in line with the nose; a hover craft keeps most of its speed
-         * doing it, so coming out of a drift snaps straight instead of scrubbing off */
+    float vx = c->vx, vz = c->vz;
+    if (!airborne) {
+        /* the mag field pulls the travel back in line with the nose, keeping most of the speed doing it */
         float sp0 = sqrtf(vx * vx + vz * vz);
         vf = vx * fx + vz * fz; vl = vx * rx + vz * rz;
-        float lg = 13.0f * surf;
+        vl -= c->strafe;                                  /* the strafe is held, not gripped away */
+        float lg = 15.0f * surf;
         if (I->surface == SURF_SNOW) lg *= 0.85f;
         vl *= expf(-lg * dt);
+        /* strafe: slide sideways at a set speed while the button is held (eases in and out) */
+        float st_want = (lean != 0 && !turning_lean && vf > 3.0f) ? lean * (9.0f + 0.7f * c->st.lean) : 0.0f;
+        c->strafe += (st_want - c->strafe) * damp(st_want != 0 ? 7.0f : 9.0f, dt);
+        vl += c->strafe;
         vx = fx * vf + rx * vl; vz = fz * vf + rz * vl;
         float sp1 = sqrtf(vx * vx + vz * vz);
-        if (sp1 > 1e-3f && sp1 < sp0 && vf > 0) { float k = (sp1 + (sp0 - sp1) * 0.85f) / sp1; vx *= k; vz *= k; }
-    }
+        if (sp1 > 1e-3f && sp1 < sp0 && vf > 0 && fabsf(c->strafe) < 0.5f) { float k = (sp1 + (sp0 - sp1) * 0.85f) / sp1; vx *= k; vz *= k; }
+        if (turning_lean && vf > 0) { float k = 1.0f - 0.06f * dt; vx *= k; vz *= k; }
+    } else c->strafe *= expf(-4.0f * dt);
     vf = vx * fx + vz * fz; vl = vx * rx + vz * rz;
     c->vx = vx; c->vz = vz;
     c->speed = sqrtf(vx * vx + vz * vz);
     c->slip = atan2f(vl, fabsf(vf) + 0.5f);
-
-    /* drift charge, tiers and points */
-    if (c->drifting) {
-        float as = fabsf(sinf(c->slip));
-        c->drift_charge += dt * (0.55f + 1.6f * as) * c->st.drift;
-        int tier = c->drift_charge > 3.3f ? 3 : (c->drift_charge > 1.9f ? 2 : (c->drift_charge > 0.85f ? 1 : 0));
-        if (tier > c->drift_tier) { c->drift_tier = tier; c->ev_tier = tier; }
-        c->drift_pts += c->speed * (0.2f + as) * dt * 6.0f;
-        if (as < 0.06f) { c->straight_t += dt; if (c->straight_t > 0.5f) drift_end(c); } else c->straight_t = 0;
-    }
 
     /* hop */
     if (in->hop && !airborne && racing) { c->vy = 3.6f; c->air = 0.06f; }
@@ -894,7 +849,7 @@ static void car_step(Car *c, float dt, int racing)
             float th = atan2f(s->tx, s->tz);
             float dv = wrap_angle(th - c->h);
             if (fabsf(dv) < 1.4f) c->h += dv * fminf(1.0f, vn * 0.06f);
-            if (c->drifting && vn > 6.0f) drift_end(c);
+            c->strafe *= 0.3f;
         }
         c->scrape = fminf(1.0f, c->speed / 20.0f);
     } else {
@@ -922,7 +877,7 @@ static void car_step(Car *c, float dt, int racing)
         float dirk = fx * s->tx + fz * s->tz;
         float pt = atanf(slope * dirk) - (in->throttle > 0.5f && c->speed < c->st.vmax * 0.7f ? 0.025f : 0.0f) + (in->brake > 0.5f && vf > 3.0f ? 0.045f : 0.0f);
         c->pitch += (pt - c->pitch) * damp(8.0f, dt);
-        float rt = clampf(c->w * c->speed * 0.0042f, -0.1f, 0.1f) + (c->drifting ? (float)c->drift_dir * 0.03f : 0.0f);
+        float rt = clampf(c->w * c->speed * 0.0042f, -0.1f, 0.1f) + clampf(c->strafe * 0.012f, -0.12f, 0.12f) - c->lean_vis * 0.04f;
         c->roll += (rt - c->roll) * damp(7.0f, dt);
         float bump = c->offroad ? 0.04f * sinf(c->progress * 2.7f) : 0.0f;
         c->susp += (bump - c->susp) * damp(10.0f, dt);
@@ -932,7 +887,7 @@ static void car_step(Car *c, float dt, int racing)
     {
         int n = trk.n;
         if (prev > n * 3 / 4 && c->sample < n / 4) {
-            if (c->cp) { c->lap++; c->cp = 0; c->ev_horn = 0; }
+            if (c->cp) { c->lap++; c->cp = 0; c->ev_horn = 0; if (c->lap >= 2 && c->lap_hits == 0) c->clean_laps++; c->lap_hits = 0; }
         } else if (prev < n / 4 && c->sample > n * 3 / 4) {
             c->lap--; c->cp = 1;
         }
@@ -1074,18 +1029,10 @@ void car_ai_input(Car *c, float dt)
     if (speed < vt) { c->in.throttle = 1.0f; c->in.brake = 0; }
     else if (speed > vt + 2.5f) { c->in.throttle = 0; c->in.brake = clampf((speed - vt) / 6.0f, 0.2f, 1.0f); }
     else { c->in.throttle = 0.4f; c->in.brake = 0; }
-    /* drifts through the tight corners (for show and for the mini-turbo) */
-    const TSample *here = &trk.s[(c->sample + 4) % n];
+    /* lean into the tight corners: the air brakes bite the turn harder */
+    const TSample *here = &trk.s[(c->sample + 3) % n];
     float ac = fabsf(here->lcurv);
-    if (c->drifting) {
-        c->in.drift = ac > 0.012f && c->drift_t < 2.6f;
-        c->in.steer = clampf(steer * 0.7f + (float)c->drift_dir * 0.35f, -1, 1);
-        if (c->drift_tier >= 2 && ac < 0.02f) c->in.drift = 0;
-    } else {
-        c->in.drift = ac > 0.026f && speed > 18.0f && fabsf(steer) > 0.35f && c->ai_drift_t <= 0;
-        if (c->in.drift) c->ai_drift_t = 2.5f;
-    }
-    if (c->ai_drift_t > 0) c->ai_drift_t -= dt;
+    c->in.lean = (ac > 0.016f && fabsf(steer) > 0.7f && speed > 15.0f) ? (steer > 0 ? 1.0f : -1.0f) : 0.0f;
     /* nitro on the straights */
     c->in.nitro = 0;
     c->ai_nitro_t -= dt;

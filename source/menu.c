@@ -14,10 +14,10 @@
 #define CYAN      0x3AD8FFFFu
 #define DARKTXT   0x101018FFu
 
-static const char *UP_NAME[NUM_UPGRADES] = { "ENGINE", "THRUSTERS", "MAG GRIP", "RECHARGE", "BOOST POWER", "DRIFT KIT" };
+static const char *UP_NAME[NUM_UPGRADES] = { "ENGINE", "THRUSTERS", "MAG GRIP", "RECHARGE", "BOOST POWER", "AIR BRAKES" };
 static const char *UP_DESC[NUM_UPGRADES] = {
     "RAISES TOP SPEED", "FASTER ACCELERATION", "MORE GRIP AND SHARPER HANDLING",
-    "THE BOOST RECHARGES FASTER", "STRONGER, FASTER BOOSTS", "DRIFTS CHARGE QUICKER AND TOP UP THE BOOST" };
+    "THE BOOST RECHARGES FASTER", "STRONGER, FASTER BOOSTS", "SHARPER LEANING TURNS AND FASTER STRAFES (L / R)" };
 static const int UP_LEVELS[NUM_UPGRADES] = { 5, 5, 5, 5, 5, 5 };
 static const int BODY_PRICE[NUM_BODIES] = { 0, 1500, 2500, 0 };
 static const char *LIVERY_NAME[5] = { "CLEAN", "RACING STRIPES", "TWO-TONE", "CONTRAST ROOF", "LIQUID SILVER" };
@@ -472,11 +472,11 @@ static void car_stats_norm(const uint8_t *lv, float *o)
 {
     CarStats s;
     car_stats_from_levels(lv, &s);
-    o[0] = 0.25f + 0.75f * (s.vmax - 38.0f) / 15.0f;
-    o[1] = 0.25f + 0.75f * (s.accel - 13.0f) / 9.0f;
-    o[2] = 0.25f + 0.75f * (s.grip - 15.5f) / 6.25f;
+    o[0] = 0.25f + 0.75f * (s.vmax - 46.0f) / 18.0f;
+    o[1] = 0.25f + 0.75f * (s.accel - 17.0f) / 12.0f;
+    o[2] = 0.25f + 0.75f * (s.grip - 20.0f) / 8.0f;
     o[3] = 0.25f + 0.75f * ((7.0f - s.recharge) / 4.5f * 0.5f + s.npow / 5.0f * 0.5f);
-    o[4] = 0.25f + 0.75f * (s.drift - 1.0f) / 1.1f;
+    o[4] = 0.25f + 0.75f * s.lean / 5.0f;
 }
 
 static void garage_render(void)
@@ -595,7 +595,7 @@ static void garage_render(void)
     /* stats */
     float sx = VW - 250, sy = 322;
     ui_slant(sx - 16, sy - 12, 240, 150, 8, 0x0C1020C8u);
-    const char *sn[5] = { "TOP SPEED", "ACCELERATION", "HANDLING", "BOOST", "DRIFT" };
+    const char *sn[5] = { "TOP SPEED", "ACCELERATION", "HANDLING", "BOOST", "AGILITY" };
     for (int i = 0; i < 5; i++) stat_bar(sx, sy + (float)i * 27, 200, sn[i], st[i], nx[i]);
     ui_text_r(BODY_NAME[body], VW - 30, 104, 16, WHITE);
     hint("L / R  TAB      A  BUY / SELECT      Y  RACE      B  BACK");
@@ -630,20 +630,20 @@ static void help_render(void)
     ui_text_weight(1.6f);
     ui_text_s("HOW TO PLAY", 40, 22, 26, WHITE);
     ui_text_weight(1.0f);
-    const char *keys[9] = { "A", "R / ZR", "L / ZL", "L + STEER", "LEFT STICK", "B", "X", "Y", "+" };
-    const char *what[9] = { "ACCELERATE", "BOOST - UNLIMITED, RECHARGES AFTER EVERY USE", "BRAKE / REVERSE", "DRIFT - HOLD THROUGH THE CORNER",
-                            "STEER (OR D-PAD)", "HOP (HOP + L STARTS A DRIFT)", "CHANGE CAMERA", "HORN", "PAUSE" };
-    for (int i = 0; i < 9; i++) {
-        float y = 76 + (float)i * 30;
-        ui_slant(40, y, 150, 24, 6, 0xFFD23AE0u);
+    const char *keys[10] = { "A", "B", "LEFT STICK", "L / ZL", "R / ZR", "L / R + STEER", "L / R ALONE", "Y", "X", "+" };
+    const char *what[10] = { "ACCELERATE", "BOOST - UNLIMITED, RECHARGES AFTER EVERY USE", "STEER (OR D-PAD)", "LEAN LEFT", "LEAN RIGHT",
+                             "LEAN INTO THE TURN FOR A MUCH SHARPER CORNER", "STRAFE SIDEWAYS - DODGE, LINE UP, BUMP RIVALS", "BRAKE / REVERSE",
+                             "CHANGE CAMERA", "PAUSE" };
+    for (int i = 0; i < 10; i++) {
+        float y = 66 + (float)i * 28;
+        ui_slant(40, y, 150, 23, 6, 0xFFD23AE0u);
         ui_text_c(keys[i], 118, y + 7, 10, DARKTXT);
         ui_text(what[i], 210, y + 7, 11, WHITE);
     }
-    float y = 76 + 9 * 30 + 6;
-    ui_text("DRIFTS CHARGE UP: BLUE, ORANGE, PURPLE SPARKS. LET GO OF L FOR A MINI-TURBO.", 40, y, 9, CYAN);
-    ui_text("DRIFTING AND SLIPSTREAMING BEHIND RIVALS BOTH SPEED UP THE BOOST RECHARGE.", 40, y + 16, 9, CYAN);
-    ui_text("PRESS A JUST BEFORE GO FOR A ROCKET START. FINISH TOP 3 TO UNLOCK THE NEXT TRACK,", 40, y + 40, 9, YELLOW);
-    ui_text("AND SPEND YOUR WINNINGS IN THE GARAGE - THE LATER TRACKS NEED A FASTER CRAFT.", 40, y + 56, 9, YELLOW);
+    float y = 66 + 10 * 28 + 6;
+    ui_text("SLIPSTREAM RIGHT BEHIND A RIVAL TO SPEED UP YOUR BOOST RECHARGE. LAPS WITHOUT A BUMP PAY A CLEAN-LAP BONUS.", 40, y, 9, CYAN);
+    ui_text("PRESS A JUST BEFORE GO FOR A ROCKET START. FINISH TOP 3 TO UNLOCK THE NEXT TRACK,", 40, y + 24, 9, YELLOW);
+    ui_text("AND SPEND YOUR WINNINGS IN THE GARAGE - THE LATER TRACKS NEED A FASTER CRAFT.", 40, y + 40, 9, YELLOW);
     hint("A / B  BACK");
 }
 
@@ -657,10 +657,10 @@ static void loading_render(void)
     ui_text_weight(1.0f);
     ui_text(I->place, 62, 220, 12, YELLOW);
     ui_text("LOADING...", 62, 380, 12, DIM);
-    const char *tips[5] = { "HOLD L THROUGH A CORNER TO DRIFT - LET GO FOR A MINI-TURBO",
-                            "PURPLE SPARKS MEAN THE BIGGEST DRIFT BOOST",
-                            "BOOST WITH R - IT NEVER RUNS OUT, BUT WAIT FOR THE RECHARGE",
-                            "HOP WITH B, THEN HOLD L TO START A DRIFT AT LOWER SPEED",
+    const char *tips[5] = { "HOLD L OR R WITH THE STICK THE SAME WAY FOR A MUCH SHARPER TURN",
+                            "TAP L OR R WITHOUT STEERING TO STRAFE SIDEWAYS",
+                            "BOOST WITH B - IT NEVER RUNS OUT, BUT WAIT FOR THE RECHARGE",
+                            "A LAP WITHOUT A SINGLE BUMP EARNS A CLEAN-LAP BONUS",
                             "HIT 88 MPH AND HOLD ON TIGHT..." };
     ui_text(tips[(sv.races + g.loading_track) % 5], 62, 410, 9, CYAN);
 }
@@ -697,7 +697,7 @@ static void results_render(void)
     ui_text("PRIZE MONEY", px + 24, py + 20, 10, DIM);
     sprintf(buf, "%d CR", g.res_base);
     ui_text_r(buf, px + 300, py + 20, 12, WHITE);
-    ui_text("DRIFT BONUS", px + 24, py + 48, 10, DIM);
+    ui_text("CLEAN LAPS", px + 24, py + 48, 10, DIM);
     sprintf(buf, "%d CR", g.res_drift);
     ui_text_r(buf, px + 300, py + 48, 12, WHITE);
     ui_rect(px + 24, py + 74, 276, 2, 0xFFFFFF30u);

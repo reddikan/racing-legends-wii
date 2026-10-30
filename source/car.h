@@ -1,5 +1,5 @@
 /*
- * RACING LEGENDS - hover craft: the models, the drift handling, the boost, collisions and the AI pilots.
+ * RACING LEGENDS - hover craft: the models, the handling (steering, leaning turns, strafing), the boost, collisions and the AI pilots.
  */
 #ifndef CAR_H
 #define CAR_H
@@ -12,7 +12,7 @@
 #define NUM_PAINTS 12
 #define MAX_CARS 8
 
-enum { UP_ENGINE, UP_TURBO, UP_GRIP, UP_RECHARGE, UP_BOOST, UP_DRIFT, NUM_UPGRADES };
+enum { UP_ENGINE, UP_TURBO, UP_GRIP, UP_RECHARGE, UP_BOOST, UP_AIRBRAKE, NUM_UPGRADES };
 #define UP_MAX 5
 #define BOOST_TIME 1.6f            /* seconds a boost lasts */
 
@@ -26,16 +26,16 @@ typedef struct {
     float grip;        /* lateral grip (m/s^2) */
     float recharge;    /* seconds for the boost to recharge from empty */
     float npow;        /* boost power level 0..5 */
-    float drift;       /* drift-charge rate multiplier */
+    float lean;        /* air brakes level 0..5: how hard L / R turn and strafe */
 } CarStats;
 
 void car_stats_from_levels(const uint8_t *lv, CarStats *st);
 
 typedef struct {
     float throttle, brake, steer;   /* 0..1, 0..1, -1..1 (+ = right) */
-    int drift;                      /* L held */
+    float lean;                     /* L = -1, R = +1: sharper turns while steering, a strafe without */
     int nitro;                      /* boost pressed (edge) */
-    int hop;                        /* B pressed (edge) */
+    int hop;                        /* unused (no hop) */
 } CarInput;
 
 typedef struct {
@@ -59,7 +59,9 @@ typedef struct {
     float drift_charge, drift_t, drift_pts, drift_total, drift_best, straight_t;
     float slip;                      /* slip angle (rad) */
     float dang;
-    float rb;                        /* rivals: pace adjustment relative to the player (catch-up) */                      /* drift: how far the nose points into the corner (rad) */
+    float rb;                        /* rivals: pace adjustment relative to the player (catch-up) */
+    int   lap_hits, clean_laps;          /* bumps this lap; laps finished without one */
+    float lean_vis, strafe;          /* leaning (for the bank and the side jets), current strafe speed */
     int   offroad;
     float wall_t, impact, scrape;    /* contact with the barriers */
     float rpm; int gear; float shift_t;

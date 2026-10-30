@@ -198,22 +198,22 @@ static void player_input(Car *c, const Input *in, float dt)
     if (digital) steer_smooth += (target - steer_smooth) * damp(fabsf(target) > fabsf(steer_smooth) ? 9.0f : 18.0f, dt);
     else steer_smooth += (target - steer_smooth) * damp(30.0f, dt);
     c->in.steer = steer_smooth;
-    /* A accelerates; L / ZL brakes and drifts; R / ZR fires the boost */
+    /* A accelerates; B fires the boost; L / ZL and R / ZR lean left and right (a sharper turn with the
+     * stick, a strafe without); Y brakes and reverses */
     float thr = (in->held & BTN_A) ? 1.0f : 0.0f;
-    float brk = (in->held & (BTN_L | BTN_ZL)) ? 1.0f : 0.0f;
-    if (in->lt > brk) brk = in->lt;
+    float brk = (in->held & BTN_Y) ? 1.0f : 0.0f;
+    int ll = (in->held & (BTN_L | BTN_ZL)) != 0 || in->lt > 0.45f;
+    int lr = (in->held & (BTN_R | BTN_ZR)) != 0 || in->rt > 0.45f;
     c->in.throttle = thr;
     c->in.brake = brk;
-    c->in.drift = brk > 0.5f;
-    c->in.nitro = (in->pressed & (BTN_R | BTN_ZR)) != 0;
-    c->in.hop = (in->pressed & BTN_B) != 0;
-    if (in->pressed & BTN_Y) { c->ev_horn = 1; }
+    c->in.lean = (float)lr - (float)ll;
+    c->in.nitro = (in->pressed & BTN_B) != 0;
+    c->in.hop = 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* effects                                                             */
 /* ------------------------------------------------------------------ */
-static const uint32_t TIER_COL[4] = { 0xFFFFFFFFu, 0x4AB8FFFFu, 0xFF9A2AFFu, 0xC860FFFFu };
 
 static void car_effects(Car *c, int idx, float dt)
 {
@@ -225,9 +225,9 @@ static void car_effects(Car *c, int idx, float dt)
     float ws = 1.1f, wz = 1.5f;
     float sliding = 0;
     if (c->air <= 0.05f) {
-        if (c->drifting) sliding = 1.0f;
+        if (0) sliding = 1.0f;
         else if (fabsf(c->slip) > 0.18f && c->speed > 8.0f) sliding = sat((fabsf(c->slip) - 0.18f) * 4.0f);
-        else if (c->in.brake > 0.5f && c->speed > 14.0f && !c->drifting) sliding = 0.6f;
+        else if (c->in.brake > 0.5f && c->speed > 14.0f) sliding = 0.6f;
     }
     for (int w = 0; w < 2; w++) {
         float s = w ? 1.0f : -1.0f;
@@ -235,7 +235,6 @@ static void car_effects(Car *c, int idx, float dt)
         (void)skid_add;
         skid_break(idx * 2 + w);
         if (!near) continue;
-        float spd = c->speed;
         if (0) {
             uint32_t sc = surf == SURF_ASPHALT ? 0xE6E8ECFFu : (surf == SURF_DIRT ? 0xC89A6AFFu : 0xF4F8FFFFu);
             if (trk.info->theme == TH_LANTERN) sc = 0x8A6A50FFu;
@@ -244,12 +243,6 @@ static void car_effects(Car *c, int idx, float dt)
             fx_spawn(ty, px + rng_r(&rr, -0.3f, 0.3f), c->y + 0.4f, pz + rng_r(&rr, -0.3f, 0.3f),
                      c->vx * 0.25f + rx * s * 1.5f + rng_r(&rr, -1, 1), rng_r(&rr, 0.6f, 1.6f), c->vz * 0.25f + rz * s * 1.5f + rng_r(&rr, -1, 1),
                      rng_r(&rr, 0.8f, 1.5f), rng_r(&rr, 0.7f, 1.1f), sc);
-        }
-        if (c->drifting && c->drift_tier > 0 && rng_f(&rr) < 0.7f) {
-            uint32_t tc = TIER_COL[c->drift_tier];
-            fx_spawn(PT_SPARK, px - rx * s * 0.3f, c->y + 0.15f, pz - rz * s * 0.3f,
-                     -fx * spd * 0.2f + rx * s * rng_r(&rr, 1, 4) + rng_r(&rr, -2, 2), rng_r(&rr, 2, 5), -fz * spd * 0.2f + rz * s * rng_r(&rr, 1, 4) + rng_r(&rr, -2, 2),
-                     rng_r(&rr, 0.18f, 0.35f), 0.05f, tc);
         }
         if (0) {
             uint32_t dc = surf == SURF_SNOW ? 0xF4F8FFFFu : (trk.info->theme == TH_FOREST ? 0x9A8A60FFu : (trk.info->theme == TH_HARBOR ? 0x8A8E96FFu : 0xC8956AFFu));
@@ -261,7 +254,13 @@ static void car_effects(Car *c, int idx, float dt)
     if (!near) return;
     if (c->speed > 8.0f && rng_f(&rr) < 0.6f)
         fx_spawn(PT_FLAME, c->x - fx * 2.8f + rng_r(&rr, -0.3f, 0.3f), c->y + 1.1f, c->z - fz * 2.8f + rng_r(&rr, -0.3f, 0.3f),
-                 c->vx * 0.6f, 0.0f, c->vz * 0.6f, 0.35f, 0.45f, c->drifting ? 0xC860FFFFu : 0x3AB8FFFFu);
+                 c->vx * 0.6f, 0.0f, c->vz * 0.6f, 0.35f, 0.45f, 0x3AB8FFFFu);
+    /* leaning / strafing: the air-brake jets fire out of the side */
+    if (c->in.lean != 0 && c->speed > 6.0f && rng_f(&rr) < 0.8f) {
+        float sd = c->in.lean > 0 ? -1.0f : 1.0f;          /* jets on the side away from the lean */
+        fx_spawn(PT_FLAME, c->x + rx * sd * 1.3f - fx * 0.6f, c->y + 0.8f, c->z + rz * sd * 1.3f - fz * 0.6f,
+                 c->vx * 0.8f + rx * sd * 7.0f, 0.2f, c->vz * 0.8f + rz * sd * 7.0f, 0.16f, 0.4f, 0x9AE8FFFFu);
+    }
     if (c->boost_t > 0 && rng_f(&rr) < 0.8f) {
         for (int s = -1; s <= 1; s += 2)
             fx_spawn(PT_FLAME, c->x - fx * 2.8f + rx * 0.45f * (float)s, c->y + 0.55f, c->z - fz * 2.8f + rz * 0.45f * (float)s,
@@ -304,6 +303,7 @@ static float vol_of(const Car *c)
 
 static void car_sounds(Car *c)
 {
+    if (c->ev_impact) c->lap_hits++;
     float v = vol_of(c), p = pan_of(c);
     if (v > 0.01f) {
         if (c->ev_impact) snd(c->ev_impact_v > 9.0f ? SND_IMPACT_L : SND_IMPACT_S, v * clampf(c->ev_impact_v / 12.0f, 0.35f, 1.0f), rng_r(&rr, 0.9f, 1.1f), p);
@@ -364,7 +364,7 @@ static void finish_player(Car *c)
     g.res_time = c->finish_time;
     g.res_base = race_reward(c->place) * g.laps / 3;
     if (g.res_base < 50) g.res_base = 50;
-    g.res_drift = (int)(c->drift_total / 8.0f) / 10 * 10;
+    g.res_drift = c->clean_laps * (150 + 50 * g.track);          /* the clean-lap bonus */
     g.res_credits = g.res_base + g.res_drift;
     g.res_unlock = 0;
     g.res_best = 0;
@@ -376,7 +376,6 @@ static void finish_player(Car *c)
     sv.races++;
     if (c->place == 1) sv.wins++;
     if (c->place <= 3) sv.podiums++;
-    if ((int)c->drift_best > sv.best_drift) sv.best_drift = (int)c->drift_best;
     save_mark_dirty();
 }
 
@@ -549,7 +548,6 @@ void race_camera(float dt, int snap)
     g.look_z += (tz - g.look_z) * k;
     /* yaw: follow the direction of travel lazily (the heading when slow) */
     float want = spd > 4.0f ? atan2f(vx, vz) : c->h;
-    if (c->drifting) want = lerpf(want, c->h, 0.0f);
     if (mode == CAM_FIXED) want = atan2f(trk.s[0].tx, trk.s[0].tz) * 0.0f + PI * 0.0f;
     float dy = wrap_angle(want - g.cyaw);
     float yr = mode == CAM_CLOSE ? 3.2f : 2.2f;
@@ -678,15 +676,15 @@ void race_loops(LoopState *o)
         o[LOOP_ENG_ON].snd = eng_snd(pl->body, 1); o[LOOP_ENG_ON].rate = eng_rate(pl); o[LOOP_ENG_ON].vol = on * 0.85f * mv;
         o[LOOP_ENG_OFF].snd = eng_snd(pl->body, 0); o[LOOP_ENG_OFF].rate = eng_rate(pl); o[LOOP_ENG_OFF].vol = (1.0f - thr) * 0.55f * mv;
         float sk = 0;
-        if (pl->drifting) sk = 0.75f + 0.25f * sat(fabsf(pl->slip) * 2.0f);
+        if (pl->in.lean != 0 && pl->speed > 10.0f) sk = 0.45f + 0.2f * sat(fabsf(pl->strafe) / 9.0f);
         else if (fabsf(pl->slip) > 0.2f && pl->speed > 8.0f) sk = sat((fabsf(pl->slip) - 0.2f) * 3.0f) * 0.7f;
         else if (pl->in.brake > 0.5f && pl->speed > 12.0f) sk = 0.5f;
         if (pl->air > 0.05f) sk = 0;
         if (trk.info->surface != SURF_ASPHALT) sk *= 0.55f;
-        o[LOOP_SKID].snd = SND_SKID; o[LOOP_SKID].vol = sk * 0.75f; o[LOOP_SKID].rate = 0.92f + 0.12f * sat(pl->speed / 40.0f) + (pl->drift_tier >= 2 ? 0.06f : 0.0f);
+        o[LOOP_SKID].snd = SND_SKID; o[LOOP_SKID].vol = sk * 0.75f; o[LOOP_SKID].rate = 0.92f + 0.12f * sat(pl->speed / 40.0f);
         float gr = 0;
         if (pl->offroad) gr = sat(pl->speed / 20.0f);
-        else if (trk.info->surface != SURF_ASPHALT) gr = sat(pl->speed / 40.0f) * 0.45f + (pl->drifting ? 0.35f : 0.0f);
+        else if (trk.info->surface != SURF_ASPHALT) gr = sat(pl->speed / 40.0f) * 0.45f;
         o[LOOP_GRAVEL].snd = SND_GRAVEL; o[LOOP_GRAVEL].vol = gr * 0.65f; o[LOOP_GRAVEL].rate = 0.8f + 0.4f * sat(pl->speed / 40.0f);
         o[LOOP_NITRO].snd = SND_NITRO_LOOP; o[LOOP_NITRO].vol = pl->boost_t > 0 ? 0.7f : (pl->mini_t > 0 ? 0.35f : 0.0f); o[LOOP_NITRO].rate = 1.0f;
         o[LOOP_WIND].snd = SND_WIND; o[LOOP_WIND].vol = sat((pl->speed - 10.0f) / 40.0f) * 0.45f; o[LOOP_WIND].rate = 0.8f + 0.5f * sat(pl->speed / 50.0f);

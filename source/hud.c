@@ -1,6 +1,6 @@
 /*
  * RACING LEGENDS - the race HUD: position and standings, lap and times, the speedometer and the boost gauge,
- * the minimap, name tags, the countdown, drift popups and the pause menu.
+ * the minimap, name tags, the countdown, popups and the pause menu.
  */
 #include "game_int.h"
 
@@ -161,7 +161,7 @@ static void draw_speedo(const Car *pl)
         ui_text_weight(1.4f);
         ui_text_s("BOOST READY", nx + 4, ny - 22, 14, CYAN);
         ui_text_weight(1.0f);
-        ui_text_s("R", nx + bw - 6, ny - 22, 14, WHITE);
+        ui_text_s("B", nx + bw - 6, ny - 22, 14, WHITE);
     } else {
         ui_slant_h(nx + 3, ny + 3, (bw - 6) * pl->nitro, bh - 6, 5, 0x1A4A8AFFu, 0x2A7AC8FFu);
         ui_text_s("RECHARGING", nx + 4, ny - 20, 11, DIM);

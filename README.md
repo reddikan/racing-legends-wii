@@ -2,33 +2,35 @@
 
 A top-down 3D hover racer for the Nintendo Wii (homebrew). Play it in Dolphin or on a real Wii with the **Classic Controller**.
 
-Glide anti-gravity craft along elevated neon decks, drift through the corners, fire your boost, and spend your winnings in the garage. The later tracks need a faster craft. The look is a grungy, glowing miniature: tilt-shift blur, film grain, RGB split, soft focus and neon bloom.
+Glide anti-gravity craft along elevated neon decks, lean hard into the corners, fire your boost, and spend your winnings in the garage. The later tracks need a faster craft. The look is a grungy, glowing miniature: tilt-shift blur, film grain, RGB split, soft focus and neon bloom.
 
 ## Controls (Classic Controller)
 
 | Button | Does |
 | --- | --- |
 | **A** | accelerate |
-| **R / ZR** | boost — unlimited, but it recharges after every use |
-| **L / ZL** | brake / reverse — **hold it while steering to drift** |
+| **B** | boost — unlimited, but it recharges after every use |
 | Left stick / D-Pad | steer |
-| **B** | hop — hop then hold L to start a drift at lower speed |
+| **L / ZL** | lean left |
+| **R / ZR** | lean right |
+| **Y** | brake / reverse |
 | **X** | change camera (follow / fixed top-down / close chase) |
-| **Y** | horn |
 | + | pause |
 | HOME | exit |
 
-A GameCube controller also works (A accelerate, R boost, L brake / drift, B hop, X camera, Y horn, START pause).
+Leaning works like F-Zero. Hold L or R with the stick pushed the same way and the craft turns much sharper. Press L or R without steering and it strafes sideways, to dodge, line up a boost pad or bump a rival.
+
+A GameCube controller also works (A accelerate, B boost, L / R lean, Y brake, X camera, START pause).
 
 ## How it plays
 
-- **Boost** never runs out. Each use empties the gauge, which then recharges. The HUD shows **BOOST READY** when you can fire again. Drifting and slipstreaming behind a rival speed up the recharge, and the Recharge upgrade shortens it.
-- **Drifting** carves you round the corner with the nose pointed at the apex. Push the stick into the turn to tighten the arc, or away to widen it. The sparks charge up blue, then orange, then purple. Let go of L for a mini-turbo: the longer the drift, the bigger the kick.
+- **Steering** is locked in: the craft goes where it points and keeps its speed through the turn.
+- **Boost** never runs out. Each use empties the gauge, which then recharges. The HUD shows **BOOST READY** when you can fire again. Slipstreaming right behind a rival speeds up the recharge, and the Recharge upgrade shortens it.
 - **Boost pads** on the straights give a quick burst of speed.
 - **88 MPH**: hit 88 and the world lights up around you.
 - **Rocket start**: press A just before the lights go green.
 - Rivals who fall behind you find extra pace, so a lead is never safe.
-- Finish in the **top 3** to unlock the next track. Every race pays credits, plus a drift bonus.
+- Finish in the **top 3** to unlock the next track. Every race pays credits, plus a bonus for every lap without a single bump.
 
 ## The garage
 
@@ -39,7 +41,7 @@ Upgrades are what make your craft faster:
 - **Mag Grip**: grip and handling
 - **Recharge**: the boost comes back sooner
 - **Boost Power**: stronger boosts
-- **Drift Kit**: drifts charge faster
+- **Air Brakes**: sharper leaning turns and faster strafes
 
 There are three craft to buy (**Comet**, **Viper**, **Titan**), plus paint colors, accents and liveries.
 
@@ -59,7 +61,7 @@ At night every craft runs its headlights.
 
 ## Sound
 
-There's no music, just racing sounds: hover turbines (a different voice for each craft), electric drift sizzle, the boost roar and its recharge chime, boost pads, energy-wall scrapes, impacts, the 88 mph sonic boom, countdown beeps and the crowd. All of it is synthesized when the game starts.
+There's no music, just racing sounds: hover turbines (a different voice for each craft), the air brakes' hiss, the boost roar and its recharge chime, boost pads, energy-wall scrapes, impacts, the 88 mph sonic boom, countdown beeps and the crowd. All of it is synthesized when the game starts.
 
 ## Saving
 
@@ -69,8 +71,8 @@ Credits, upgrades, craft, paint, unlocked tracks, records and options save to `s
 
 With devkitPro installed, `make` builds `boot.dol` and an `apps/racinglegends/` folder for a real Wii's SD card.
 
-When pushed to GitHub, the Actions workflow builds the game in the devkitPro container. It publishes the result as `racinglegends_v3.dol` on the **v3** release.
+When pushed to GitHub, the Actions workflow builds the game in the devkitPro container. It publishes the result as `racinglegends_v4.dol` on the **v4** release.
 
-`sh tools/run_tests.sh shots|bots|reel|fx` runs the native test harness (a software renderer plus bot drivers). No Wii is needed.
+`sh tools/run_tests.sh shots|bots|reel|fx|strafe` runs the native test harness (a software renderer plus bot drivers). No Wii is needed.
 
 The HUD font is Bebas Neue by Dharma Type, under the SIL Open Font License (`tools/fonts/OFL.txt`).
