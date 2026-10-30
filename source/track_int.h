@@ -6,8 +6,8 @@
 #include "r3d.h"
 #include "util.h"
 
-#define GRID 4.0f
-#define GMAX 270                   /* nodes per side at most */
+#define GRID 3.0f
+#define GMAX 360                   /* nodes per side at most */
 
 extern int    g_w, g_h;            /* terrain grid size (nodes) */
 extern float  g_x0, g_z0;
@@ -32,6 +32,8 @@ void emis_quad(int mode, float x0, float y0, float z0, float x1, float y1, float
 /* an axis-rotated box: centre (x, z) on the ground at y, half sizes, yaw */
 void lit_box(float x, float y, float z, float hx, float hy, float hz, float yaw, uint32_t top, uint32_t side);
 /* a vertical n-sided prism / cone frustum */
+void lit_tri_n(int mode, const float *p0, const float *n0, const float *p1, const float *n1, const float *p2, const float *n2, uint32_t alb);
+void lit_blob(float x, float y, float z, float rx, float ry, float rz, uint32_t c, float wob, uint32_t seed);
 void lit_prism(float x, float y0, float z, float r0, float r1, float h, int n, float rot, uint32_t c, int cap);
 /* shadow of a set of 3D points (projected along the sun onto the ground) */
 void shadow_hull(const float *pts, int n, float gy);
@@ -41,6 +43,7 @@ void ao_blob(float x, float z, float r, float strength);
 void add_light(float x, float y, float z, float r, uint32_t c, float glow);
 
 void scenery_plan(void);            /* choose every prop and add the lights (before the ground is baked) */
-void scenery_build(void);           /* the props' meshes and shadows */
+void scenery_build(void);
+float scenery_ao(float x, float z);         /* 0.45..1: how much nearby props shade the ground */           /* the props' meshes and shadows */
 
 #endif

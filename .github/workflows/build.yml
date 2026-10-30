@@ -1,4 +1,4 @@
-name: Build racinglegends_v1.dol
+name: Build racinglegends_v2.dol
 on: [push, workflow_dispatch]
 permissions:
   contents: write
@@ -20,12 +20,12 @@ jobs:
           w=$(grep -E "warning" build.log | head -40 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
           [ -n "$w" ] && echo "::warning title=Compiler warnings::$w" || true
       - run: $DEVKITPPC/bin/powerpc-eabi-size boot.elf | tee -a build.log
-      - run: cp boot.dol racinglegends_v1.dol
+      - run: cp boot.dol racinglegends_v2.dol
       - uses: actions/upload-artifact@v4
         with:
           name: racing-legends-wii
           path: |
-            racinglegends_v1.dol
+            racinglegends_v2.dol
             build.log
             apps/
   release:
@@ -36,10 +36,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: racing-legends-wii
-      - name: Publish the v1 download
+      - name: Publish the v2 download
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view v1 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create v1 -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "RACING LEGENDS v1" --notes "Open racinglegends_v1.dol in Dolphin (Classic Controller), or copy apps/racinglegends to an SD card."
-          gh release upload v1 racinglegends_v1.dol build.log -R "$GITHUB_REPOSITORY" --clobber
+          gh release view v2 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create v2 -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "RACING LEGENDS v2" --notes "Open racinglegends_v2.dol in Dolphin (Classic Controller), or copy apps/racinglegends to an SD card."
+          gh release upload v2 racinglegends_v2.dol build.log -R "$GITHUB_REPOSITORY" --clobber

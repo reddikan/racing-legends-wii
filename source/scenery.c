@@ -12,12 +12,14 @@
 enum {
     P_PINE, P_TREE, P_ROCK, P_CACTUS, P_BUSH, P_STAND, P_GANTRY, P_LAMP, P_BUILDING, P_CONTAINERS, P_CRANE,
     P_CABIN, P_SNOWMAN, P_HAY, P_TENT, P_BOARD, P_LANTERN, P_FLOOD, P_FIRE, P_BOAT, P_DEADTREE, P_FLAGPOLE,
+    P_CRYSTAL, P_DOME, P_ANTENNA,
 };
 
 typedef struct { uint8_t type, var; float x, z, y, s, rot; } Prop;
 #define MAX_PROPS 5200
 static Prop props[MAX_PROPS];
 static int nprops;
+static int ao_ready;
 
 static Prop *add_prop(int type, float x, float z, float s, float rot, int var)
 {
@@ -80,7 +82,7 @@ static void stands_at_start(int lights)
         }
     }
     if (lights) {
-        const float fd[4] = { trk.length - 62.0f, 50.0f, trk.length - 110.0f, 110.0f };
+        const float fd[4] = { trk.length - 62.0f, 50.0f, trk.length - 80.0f, 110.0f };
         const int fs[4] = { -1, 1, 1, -1 };
         const float fo[4] = { 14.0f, 14.0f, 4.0f, 4.0f };
         for (int i = 0; i < 4; i++) {
@@ -97,125 +99,87 @@ static void stands_at_start(int lights)
 static void plan_forest(void)
 {
     stands_at_start(0);
-    scatter(P_PINE, 8.0f, 4.0f, 95.0f, 0.62f, 1, 0.8f, 1.35f, 0);
-    scatter(P_TREE, 13.0f, 4.0f, 95.0f, 0.25f, 2, 0.8f, 1.2f, 0);
-    scatter(P_ROCK, 17.0f, 3.0f, 95.0f, 0.22f, 3, 0.6f, 1.6f, 0);
+    scatter(P_PINE, 10.0f, 4.0f, 66.0f, 0.5f, 1, 0.8f, 1.35f, 0);
+    scatter(P_TREE, 13.0f, 4.0f, 66.0f, 0.22f, 2, 0.8f, 1.2f, 0);
+    scatter(P_ROCK, 17.0f, 3.0f, 72.0f, 0.22f, 3, 0.6f, 1.6f, 0);
     scatter(P_BUSH, 9.0f, 2.0f, 30.0f, 0.25f, 4, 0.7f, 1.2f, 0);
     scatter(P_HAY, 40.0f, 1.5f, 5.0f, 0.5f, 5, 1.0f, 1.0f, 0);
     scatter(P_TENT, 70.0f, 3.0f, 12.0f, 0.6f, 6, 1.0f, 1.0f, 0);
     scatter(P_FLAGPOLE, 55.0f, 1.5f, 4.0f, 0.6f, 7, 1.0f, 1.0f, 0);
 }
 
-static void plan_canyon(void)
+/* ---- the hover worlds ---- */
+static void edge_lights(uint32_t a, uint32_t b, float r)
 {
-    stands_at_start(0);
-    scatter(P_ROCK, 9.0f, 3.0f, 95.0f, 0.40f, 11, 0.7f, 2.4f, 1);
-    scatter(P_CACTUS, 10.0f, 3.0f, 60.0f, 0.30f, 12, 0.8f, 1.3f, 0);
-    scatter(P_BUSH, 8.0f, 2.0f, 60.0f, 0.30f, 13, 0.6f, 1.0f, 1);
-    scatter(P_DEADTREE, 30.0f, 3.0f, 60.0f, 0.30f, 14, 0.8f, 1.2f, 0);
-    scatter(P_TENT, 80.0f, 3.0f, 10.0f, 0.5f, 15, 1.0f, 1.0f, 1);
-    scatter(P_FLAGPOLE, 60.0f, 1.5f, 4.0f, 0.6f, 16, 1.0f, 1.0f, 1);
-}
-
-static void plan_snow(void)
-{
-    stands_at_start(0);
-    scatter(P_PINE, 9.0f, 4.0f, 95.0f, 0.6f, 21, 0.8f, 1.4f, 1);
-    scatter(P_ROCK, 18.0f, 4.0f, 95.0f, 0.2f, 22, 0.8f, 2.0f, 2);
-    scatter(P_CABIN, 70.0f, 8.0f, 40.0f, 0.45f, 23, 1.0f, 1.0f, 0);
-    scatter(P_SNOWMAN, 45.0f, 2.0f, 8.0f, 0.4f, 24, 1.0f, 1.0f, 0);
-    scatter(P_FLAGPOLE, 30.0f, 3.0f, 3.5f, 0.6f, 25, 1.0f, 1.0f, 2);
-}
-
-static void plan_harbor(void)
-{
-    stands_at_start(1);
-    /* street lamps both sides */
-    for (int k = 0; k < trk.n; k += 15) {
-        int side = ((k / 15) & 1) ? 1 : -1;
-        float x, z, yaw;
-        beside(trk.s[k].dist, side, 1.2f, &x, &z, &yaw);
-        if (!dry(x, z)) continue;
-        Prop *p = add_prop(P_LAMP, x, z, 1.0f, yaw, (k / 30) & 1);
-        if (p) {
-            float lx = x + sinf(yaw) * 1.6f, lz = z + cosf(yaw) * 1.6f;
-            add_light(lx, p->y + 7.0f, lz, 21.0f, p->var ? 0xFFC890FFu : 0xD8E6FFFFu, 2.0f);
-        }
+    for (int k = 0; k < trk.n; k += 9) {
+        const TSample *s = &trk.s[k];
+        int side = ((k / 9) & 1) ? 1 : -1;
+        float o = side < 0 ? -(s->wl - 0.4f) : (s->wr - 0.4f);
+        add_light(s->x + s->nx * o, s->y + 1.6f, s->z + s->nz * o, r, side < 0 ? a : b, 0.0f);
     }
-    /* city blocks */
+}
+
+static void plan_city(void)
+{
+    edge_lights(0x2AD8FFFFu, 0xFF3AC8FFu, 12.0f);
     Rng r = { 777 };
-    for (float z = trk.minz; z < trk.maxz; z += 22.0f)
-        for (float x = trk.minx; x < trk.maxx; x += 22.0f) {
-            float px = x + rng_r(&r, 2, 20), pz = z + rng_r(&r, 2, 20);
-            float w = rng_r(&r, 5, 9), d = rng_r(&r, 5, 9), roll = rng_f(&r), h = rng_r(&r, 0, 1);
+    for (float z = trk.minz; z < trk.maxz; z += 15.0f)
+        for (float x = trk.minx; x < trk.maxx; x += 15.0f) {
+            float px = x + rng_r(&r, 1, 14), pz = z + rng_r(&r, 1, 14);
+            float w = rng_r(&r, 3.5f, 6.5f), d = rng_r(&r, 3.5f, 6.5f), roll = rng_f(&r);
             float cl = track_clearance(px, pz);
-            if (cl < 9.0f + fmaxf(w, d) || roll > 0.8f) continue;
-            if (!dry(px, pz) || !dry(px + w, pz + d) || !dry(px - w, pz - d)) continue;
-            Prop *p = add_prop(P_BUILDING, px, pz, h, 0.0f, (int)(roll * 100.0f) % 6);
+            if (cl < 5.0f + fmaxf(w, d) || cl > 70.0f || roll > 0.85f) continue;
+            float hmax = clampf((cl - 6.0f) / 30.0f, 0.12f, 1.8f);
+            Prop *p = add_prop(P_BUILDING, px, pz, rng_r(&r, 0.1f, 1.0f) * hmax, 0.0f, (int)(roll * 100.0f) % 6);
             if (p) {
-                p->rot = w * 16.0f + d;             /* footprint packed into rot: w*16 + d */
-                if (cl < 30.0f) {
-                    /* neon on the side facing the track */
-                    uint32_t neon[5] = { 0xFF3AA8FFu, 0x3AE8FFFFu, 0xFFD23AFFu, 0x9A5AFFFFu, 0x5AFF8AFFu };
-                    add_light(px, p->y + 6.0f, pz, 18.0f, neon[(int)(h * 5) % 5], 0.0f);
-                }
+                p->rot = floorf(w) * 16.0f + floorf(d);
+                const uint32_t neon[5] = { 0xFF3AA8FFu, 0x3AE8FFFFu, 0xFFD23AFFu, 0x9A5AFFFFu, 0x5AFF8AFFu };
+                if (cl < 26.0f) add_light(px, p->y + 4.0f, pz, 16.0f, neon[(int)(p->s * 5) % 5], 0.0f);
             }
         }
-    scatter(P_CONTAINERS, 24.0f, 6.0f, 60.0f, 0.5f, 31, 1.0f, 1.0f, 0);
-    /* cranes and boats by the water */
-    Rng q = { 4242 };
-    int cranes = 0, boats = 0;
-    for (int tries = 0; tries < 3000 && (cranes < 5 || boats < 8); tries++) {
-        float px = rng_r(&q, trk.minx, trk.maxx), pz = rng_r(&q, trk.minz, trk.maxz);
-        float th = terrain_height(px, pz);
-        if (track_clearance(px, pz) < 14.0f) continue;
-        if (boats < 8 && th < trk.water - 3.0f) { add_prop(P_BOAT, px, pz, rng_r(&q, 0.8f, 1.3f), rng_r(&q, 0, TAU), boats % 3); boats++; continue; }
-        if (cranes < 5 && th > trk.water + 0.2f && terrain_height(px + 12, pz) < trk.water) {
-            Prop *p = add_prop(P_CRANE, px, pz, 1.0f, rng_r(&q, 0, TAU), 0);
-            if (p) add_light(px, p->y + 26.0f, pz, 1.0f, 0xFF3020FFu, 1.4f);
-            cranes++;
-        }
-    }
 }
 
-static void plan_lantern(void)
+static void plan_mesa(void)
 {
-    stands_at_start(1);
-    /* lantern posts along the fences, alternating sides */
-    for (int k = 0; k < trk.n; k += 11) {
-        int side = ((k / 11) & 1) ? 1 : -1;
-        float x, z, yaw;
-        beside(trk.s[k].dist, side, 0.9f, &x, &z, &yaw);
-        if (!dry(x, z)) continue;
-        Prop *p = add_prop(P_LANTERN, x, z, 1.0f, yaw, 0);
-        if (p) add_light(x, p->y + 3.2f, z, 15.0f, 0xFFB060FFu, 1.3f);
-    }
-    scatter(P_PINE, 9.0f, 4.0f, 95.0f, 0.45f, 41, 0.8f, 1.3f, 0);
-    scatter(P_TREE, 9.5f, 4.0f, 95.0f, 0.45f, 42, 0.9f, 1.4f, 1);
-    scatter(P_HAY, 30.0f, 1.5f, 6.0f, 0.5f, 43, 1.0f, 1.0f, 0);
-    scatter(P_TENT, 60.0f, 4.0f, 12.0f, 0.5f, 44, 1.0f, 1.0f, 0);
-    /* campfires with their own flickering light */
-    Rng q = { 99 };
-    int fires = 0;
-    for (int tries = 0; tries < 2000 && fires < 14; tries++) {
+    scatter(P_ROCK, 10.0f, 4.0f, 80.0f, 0.4f, 11, 0.8f, 2.6f, 1);
+    scatter(P_CRYSTAL, 14.0f, 4.0f, 90.0f, 0.3f, 12, 0.7f, 1.4f, 1);
+    scatter(P_DOME, 60.0f, 8.0f, 60.0f, 0.5f, 13, 1.0f, 1.6f, 0);
+    scatter(P_ANTENNA, 70.0f, 6.0f, 50.0f, 0.5f, 14, 1.0f, 1.0f, 0);
+}
+
+static void plan_ice(void)
+{
+    scatter(P_CRYSTAL, 9.0f, 4.0f, 80.0f, 0.45f, 21, 0.8f, 1.8f, 0);
+    scatter(P_ROCK, 16.0f, 4.0f, 80.0f, 0.25f, 22, 0.8f, 2.2f, 2);
+    scatter(P_DOME, 55.0f, 8.0f, 60.0f, 0.5f, 23, 1.0f, 1.8f, 1);
+    scatter(P_ANTENNA, 70.0f, 6.0f, 50.0f, 0.4f, 24, 1.0f, 1.0f, 1);
+}
+
+static void plan_magma(void)
+{
+    edge_lights(0xFF6A1AFFu, 0xFFB03AFFu, 14.0f);
+    scatter(P_ROCK, 9.0f, 4.0f, 80.0f, 0.4f, 41, 0.8f, 2.6f, 3);
+    scatter(P_CRYSTAL, 13.0f, 4.0f, 90.0f, 0.35f, 42, 0.7f, 1.5f, 2);
+    /* the lava lights its surroundings */
+    Rng q = { 31 };
+    for (int tries = 0; tries < 6000 && trk.nlight < MAX_LIGHTS - 20; tries++) {
         float px = rng_r(&q, trk.minx, trk.maxx), pz = rng_r(&q, trk.minz, trk.maxz);
-        float cl = track_clearance(px, pz);
-        if (cl < 6.0f || cl > 30.0f || !dry(px, pz)) continue;
-        Prop *p = add_prop(P_FIRE, px, pz, 1.0f, 0, 0);
-        if (p) add_light(px, p->y + 1.2f, pz, 14.0f, 0xFF8A3AFFu, 1.8f);
-        fires++;
+        if (terrain_height(px, pz) > trk.water - 0.5f) continue;
+        if (rng_f(&q) > 0.5f) continue;
+        add_light(px, trk.water + 4.0f, pz, 34.0f, 0xFF5A1AFFu, 0.0f);
     }
 }
 
 void scenery_plan(void)
 {
     nprops = 0;
+    ao_ready = 0;
     switch (trk.info->theme) {
     case TH_FOREST: plan_forest(); break;
-    case TH_CANYON: plan_canyon(); break;
-    case TH_SNOW: plan_snow(); break;
-    case TH_HARBOR: plan_harbor(); break;
-    default: plan_lantern(); break;
+    case TH_CANYON: plan_mesa(); break;
+    case TH_SNOW: plan_ice(); break;
+    case TH_HARBOR: plan_city(); break;
+    default: plan_magma(); break;
     }
     /* keep props from overlapping each other badly: drop small props inside bigger ones */
     for (int i = 0; i < nprops; i++) {
@@ -239,7 +203,7 @@ static void pine(const Prop *p)
     float s = p->s, h = 9.0f * s, y = p->y;
     int snowy = p->var == 1;
     uint32_t trunk = 0x6A4A32FFu;
-    uint32_t g[3] = { 0x2F6A3AFFu, 0x3A7A40FFu, 0x4C8E48FFu };
+    uint32_t g[3] = { 0x2E7A3EFFu, 0x3C8C46FFu, 0x52A452FFu };
     if (trk.info->theme == TH_LANTERN) { g[0] = 0x245A30FFu; g[1] = 0x2C6636FFu; g[2] = 0x387640FFu; }
     lit_prism(p->x, y - 0.2f, p->z, 0.35f * s, 0.25f * s, 2.0f * s, 5, p->rot, trunk, 0);
     float r = 3.0f * s, by = y + 1.4f * s;
@@ -266,14 +230,15 @@ static void blob_tree(const Prop *p)
 {
     float s = p->s, y = p->y;
     uint32_t trunk = 0x6E4E36FFu;
-    uint32_t leaf = p->var ? 0x3E7A36FFu : 0x6AA640FFu;
+    uint32_t leaf = p->var ? 0x4A9240FFu : 0x72B24AFFu;
     if (trk.info->theme == TH_LANTERN) leaf = 0x3A6A30FFu;
     lit_prism(p->x, y - 0.2f, p->z, 0.4f * s, 0.3f * s, 3.0f * s, 5, p->rot, trunk, 0);
     /* canopy: two stacked octagonal "domes" */
     float r = 3.4f * s, cy = y + 3.0f * s;
-    lit_prism(p->x, cy, p->z, r * 0.7f, r, 1.4f * s, 8, p->rot, col_scale(leaf, 0.9f), 0);
-    lit_prism(p->x, cy + 1.4f * s, p->z, r, r * 0.85f, 1.4f * s, 8, p->rot, leaf, 0);
-    lit_prism(p->x, cy + 2.8f * s, p->z, r * 0.85f, r * 0.3f, 1.6f * s, 8, p->rot, col_scale(leaf, 1.12f), 1);
+    uint32_t sd = (uint32_t)(p->x * 7.0f + p->z * 13.0f);
+    lit_blob(p->x, cy + 2.2f * s, p->z, r * 1.0f, r * 0.9f, r * 1.0f, leaf, 0.06f, sd);
+    lit_blob(p->x + cosf(p->rot) * r * 0.62f, cy + 1.2f * s, p->z + sinf(p->rot) * r * 0.62f, r * 0.62f, r * 0.58f, r * 0.62f, col_scale(leaf, 0.94f), 0.06f, sd + 1);
+    lit_blob(p->x - cosf(p->rot + 0.9f) * r * 0.55f, cy + 1.5f * s, p->z - sinf(p->rot + 0.9f) * r * 0.55f, r * 0.58f, r * 0.55f, r * 0.58f, col_scale(leaf, 1.04f), 0.06f, sd + 2);
     float pts[16 * 3];
     for (int i = 0; i < 8; i++) {
         float a = (float)i / 8.0f * TAU;
@@ -301,7 +266,7 @@ static void rock(const Prop *p)
 {
     /* a squashed, jittered octahedron-ish boulder */
     float s = p->s * 1.4f;
-    uint32_t base = p->var == 1 ? 0xB86E46FFu : (p->var == 2 ? 0x8A92A2FFu : 0x8E8C88FFu);
+    uint32_t base = p->var == 1 ? 0xB86E46FFu : (p->var == 2 ? 0x8A92A2FFu : (p->var == 3 ? 0x3A3436FFu : 0x8E8C88FFu));
     Rng r = { (uint32_t)(p->x * 131.0f + p->z * 17.0f) | 1u };
     const int N = 6;
     float ring[6][3], top[3] = { p->x + rng_r(&r, -0.3f, 0.3f) * s, p->y + rng_r(&r, 1.1f, 1.6f) * s, p->z + rng_r(&r, -0.3f, 0.3f) * s };
@@ -309,18 +274,12 @@ static void rock(const Prop *p)
         float a = p->rot + (float)i / (float)N * TAU, rr = s * rng_r(&r, 0.85f, 1.25f);
         ring[i][0] = p->x + cosf(a) * rr; ring[i][1] = p->y + s * rng_r(&r, 0.35f, 0.65f); ring[i][2] = p->z + sinf(a) * rr;
     }
-    for (int i = 0; i < N; i++) {
-        int j = (i + 1) % N;
-        uint32_t c = col_scale(base, rng_r(&r, 0.9f, 1.1f));
-        lit_tri(RM_OPAQUE, ring[j][0], ring[j][1], ring[j][2], ring[i][0], ring[i][1], ring[i][2], top[0], top[1], top[2], c);
-        float bi0x = p->x + (ring[i][0] - p->x) * 0.8f, bi0z = p->z + (ring[i][2] - p->z) * 0.8f;
-        float bj0x = p->x + (ring[j][0] - p->x) * 0.8f, bj0z = p->z + (ring[j][2] - p->z) * 0.8f;
-        lit_quad(RM_OPAQUE, bj0x, p->y - 0.3f, bj0z, bi0x, p->y - 0.3f, bi0z, ring[i][0], ring[i][1], ring[i][2], ring[j][0], ring[j][1], ring[j][2], col_scale(c, 0.92f));
-    }
+    lit_blob(p->x, p->y + 0.25f * s, p->z, s * 1.05f, s * 0.75f, s * 0.9f, base, 0.35f, (uint32_t)(p->x * 31.0f + p->z));
     if (p->var == 2 || trk.info->theme == TH_SNOW) {
         /* snow cap */
         float cy = top[1] - 0.05f;
-        lit_prism(top[0], cy - 0.35f * s, top[2], 0.75f * s, 0.0f, 0.42f * s, 6, p->rot, 0xF4F8FFFFu, 0);
+        (void)cy;
+        lit_blob(p->x, p->y + 0.7f * s, p->z, s * 0.75f, s * 0.38f, s * 0.65f, 0xF4F8FFFFu, 0.15f, (uint32_t)(p->z * 17.0f));
     }
     float pts[7 * 3];
     for (int i = 0; i < N; i++) { pts[i * 3] = ring[i][0]; pts[i * 3 + 1] = ring[i][1]; pts[i * 3 + 2] = ring[i][2]; }
@@ -349,8 +308,7 @@ static void bush(const Prop *p)
 {
     float s = p->s;
     uint32_t c = p->var ? 0x9A8A54FFu : 0x5A9A40FFu;
-    lit_prism(p->x, p->y - 0.2f, p->z, 1.0f * s, 1.1f * s, 0.6f * s, 6, p->rot, c, 0);
-    lit_prism(p->x, p->y + 0.4f * s, p->z, 1.1f * s, 0.4f * s, 0.7f * s, 6, p->rot, col_scale(c, 1.1f), 1);
+    lit_blob(p->x, p->y + 0.3f * s, p->z, 1.1f * s, 0.75f * s, 1.0f * s, c, 0.25f, (uint32_t)(p->x * 5.0f + p->z * 3.0f));
 }
 
 /* a box with only the faces that can be seen from above (no bottom) */
@@ -654,6 +612,40 @@ static void flagpole(const Prop *p)
     lit_quad(RM_OPAQUE, p->x + fx, y + 4.4f, p->z + fz, p->x, y + 3.8f, p->z, p->x, y + 5.2f, p->z, p->x + fx, y + 5.0f, p->z + fz, col_scale(c, 0.85f));
 }
 
+static void crystal(const Prop *p)
+{
+    const uint32_t C[3] = { 0x5AE8F0FFu, 0xB86AFFFFu, 0xFF8A3AFFu };
+    uint32_t c = C[p->var % 3];
+    Rng r = { (uint32_t)(p->x * 17 + p->z * 29) | 1u };
+    for (int i = 0; i < 4; i++) {
+        float a = rng_r(&r, 0, TAU), d = rng_r(&r, 0, 1.2f) * p->s, h = rng_r(&r, 1.5f, 4.0f) * p->s, rr = rng_r(&r, 0.3f, 0.6f) * p->s;
+        float x = p->x + cosf(a) * d, z = p->z + sinf(a) * d, y = p->y - 0.2f;
+        lit_prism(x, y, z, rr, rr * 0.8f, h * 0.7f, 6, a, c, 0);
+        lit_prism(x, y + h * 0.7f, z, rr * 0.8f, 0.0f, h * 0.3f, 6, a, col_scale(c, 1.2f), 0);
+    }
+    if (trk.info->night) add_light(p->x, p->y + 2.0f, p->z, 0.0f, c, 1.2f * p->s);
+    ao_blob(p->x, p->z, 2.0f * p->s, 0.35f);
+}
+
+static void dome(const Prop *p)
+{
+    float r = 5.0f * p->s;
+    lit_prism(p->x, p->y - 0.3f, p->z, r * 1.05f, r * 1.05f, 0.8f, 10, 0, 0x6A7080FFu, 0);
+    lit_blob(p->x, p->y + 0.5f, p->z, r, r * 0.7f, r, p->var ? 0x9AC8F0FFu : 0xC8A898FFu, 0.0f, 3);
+    lit_box(p->x + r, p->y, p->z, 1.4f, 1.0f, 1.0f, 0, 0x8A90A0FFu, 0x6A7080FFu);
+    float pts[] = { p->x - r, p->y, p->z, p->x + r, p->y, p->z, p->x, p->y, p->z - r, p->x, p->y, p->z + r, p->x, p->y + r * 0.7f, p->z };
+    shadow_hull(pts, 5, p->y);
+}
+
+static void antenna(const Prop *p)
+{
+    lit_prism(p->x, p->y - 0.2f, p->z, 0.5f, 0.15f, 14.0f, 6, 0, 0x8A90A0FFu, 0);
+    lit_box(p->x, p->y + 9.0f, p->z, 1.6f, 0.08f, 0.08f, 0.6f, 0x8A90A0FFu, 0x6A7080FFu);
+    add_light(p->x, p->y + 14.2f, p->z, 0.0f, 0xFF3020FFu, 0.9f);
+    float pts[] = { p->x - 0.5f, p->y, p->z, p->x + 0.5f, p->y, p->z, p->x, p->y + 14.0f, p->z };
+    shadow_hull(pts, 3, p->y);
+}
+
 void scenery_build(void)
 {
     for (int i = 0; i < nprops; i++) {
@@ -681,7 +673,52 @@ void scenery_build(void)
         case P_CABIN: cabin(p); break;
         case P_SNOWMAN: snowman(p); break;
         case P_FLAGPOLE: flagpole(p); break;
+        case P_CRYSTAL: crystal(p); break;
+        case P_DOME: dome(p); break;
+        case P_ANTENNA: antenna(p); break;
         default: break;
         }
     }
+}
+
+/* soft contact shading: every prop darkens the ground around it */
+#define AOB 16.0f
+#define AON 96
+static int16_t ao_head[AON * AON], ao_next[MAX_PROPS];
+
+float scenery_ao(float x, float z)
+{
+    if (!ao_ready) {
+        for (int i = 0; i < AON * AON; i++) ao_head[i] = -1;
+        for (int i = 0; i < nprops; i++) {
+            int bx = (int)((props[i].x - trk.minx) / AOB), bz = (int)((props[i].z - trk.minz) / AOB);
+            if (bx < 0 || bz < 0 || bx >= AON || bz >= AON) continue;
+            ao_next[i] = ao_head[bz * AON + bx]; ao_head[bz * AON + bx] = (int16_t)i;
+        }
+        ao_ready = 1;
+    }
+    int bx = (int)((x - trk.minx) / AOB), bz = (int)((z - trk.minz) / AOB);
+    float k = 1.0f;
+    for (int zz = bz - 1; zz <= bz + 1; zz++)
+        for (int xx = bx - 1; xx <= bx + 1; xx++) {
+            if (xx < 0 || zz < 0 || xx >= AON || zz >= AON) continue;
+            for (int i = ao_head[zz * AON + xx]; i >= 0; i = ao_next[i]) {
+                const Prop *p = &props[i];
+                float r, st;
+                switch (p->type) {
+                case P_PINE: case P_TREE: r = 5.5f * p->s; st = 0.42f; break;
+                case P_ROCK: r = 2.8f * p->s; st = 0.35f; break;
+                case P_BUSH: case P_HAY: case P_CACTUS: r = 2.4f * p->s; st = 0.3f; break;
+                case P_STAND: r = 20.0f; st = 0.35f; break;
+                case P_BUILDING: case P_CABIN: case P_CONTAINERS: r = 11.0f; st = 0.35f; break;
+                case P_TENT: case P_LANTERN: case P_LAMP: case P_SNOWMAN: case P_FLAGPOLE: r = 2.6f; st = 0.25f; break;
+                default: continue;
+                }
+                float dx = x - p->x, dz = z - p->z, d2 = dx * dx + dz * dz;
+                if (d2 >= r * r) continue;
+                float f = 1.0f - sqrtf(d2) / r;
+                k *= 1.0f - st * f * f;
+            }
+        }
+    return k < 0.45f ? 0.45f : k;
 }

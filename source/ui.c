@@ -2,6 +2,7 @@
  * RACING LEGENDS - 2D primitives and the stroke font. See ui.h.
  */
 #include "ui.h"
+#include "font_bebas.h"
 
 #include <math.h>
 #include <string.h>
@@ -179,7 +180,7 @@ static int   g_off[128], g_cnt[128];          /* point offset / count; strokes s
 static int   g_ready;
 static float g_weight = 1.0f;
 
-static void font_init(void)
+__attribute__((unused)) static void font_init(void)
 {
     int np = 0;
     for (int ch = 0; ch < 128; ch++) {
@@ -204,75 +205,46 @@ static void font_init(void)
 
 void ui_text_weight(float w) { g_weight = w; }
 
-static float adv_of(int ch)
-{
-    switch (ch) {
-    case ' ': return 3.6f;
-    case '.': case ',': case ':': case '!': case '\'': return 2.6f;
-    case '1': return 4.9f;
-    case 'I': return 4.6f;
-    default: return 5.6f;
-    }
-}
-
-static float shift_of(int ch)
-{
-    switch (ch) {
-    case '.': case ',': case ':': case '!': case '\'': return -1.0f;
-    default: return 0.0f;
-    }
-}
+/* Bebas Neue from the atlas: size = cap height in pixels; weight > 1.25 uses the heavy cut */
+#define TRACKING 0.06f
+#define TEXT_SCALE 1.22f
+static int wsel(void) { return g_weight > 1.25f ? 1 : 0; }
 
 float ui_text_w(const char *s, float size)
 {
-    float k = size / 6.0f, w = 0;
-    for (; *s; s++) {
+    size *= TEXT_SCALE;
+    float k = size / FONT_CAP_H, w = 0;
+    int ws = wsel(), n = 0;
+    for (; *s; s++, n++) {
         int ch = (unsigned char)*s;
         if (ch >= 'a' && ch <= 'z') ch -= 32;
-        if (ch >= 128) ch = '?';
-        w += adv_of(ch);
+        if (ch < 32 || ch > 126) ch = '?';
+        w += FONT_GLYPH[ws][ch - 32].adv * k + size * TRACKING;
     }
-    if (w > 0) w -= 1.6f;
-    return w * k;
+    if (n) w -= size * TRACKING;
+    return w;
 }
 
 static void draw_text(const char *s, float x, float y, float size, uint32_t c)
 {
-    if (!g_ready) font_init();
-    float k = size / 6.0f;
-    float th = size * 0.155f * g_weight;
-    float slant = 0.2f;
-    float cx = x;
+    y -= size * (TEXT_SCALE - 1.0f) * 0.5f;
+    size *= TEXT_SCALE;
+    float k = size / FONT_CAP_H, base = y + size, pen = x;
+    int ws = wsel();
     for (; *s; s++) {
         int ch = (unsigned char)*s;
         if (ch >= 'a' && ch <= 'z') ch -= 32;
-        if (ch >= 128) ch = '?';
-        float sh = shift_of(ch);
-        const float *p = &g_pts[g_off[ch] * 2];
-        int n = g_cnt[ch];
-        float lx = 0, ly = 0;
-        int have = 0, pts = 0;
-        float h = th * 0.5f;
-        for (int i = 0; i < n; i++) {
-            if (p[i * 2] < -50.0f) {
-                if (pts == 1) ui_rect(lx - h, ly - h, th, th, c);        /* a dot */
-                have = 0; pts = 0; continue;
-            }
-            float gx = p[i * 2] + sh, gy = p[i * 2 + 1];
-            float X = cx + (gx + (6.0f - gy) * slant) * k, Y = y + gy * k;
-            if (have) {
-                /* the stroke, extended by half its width at both ends (square caps that also fill the joints) */
-                float dx = X - lx, dy = Y - ly, l = sqrtf(dx * dx + dy * dy);
-                if (l > 1e-4f) {
-                    float ux = dx / l * h, uy = dy / l * h;
-                    float ax = lx - ux, ay = ly - uy, bx = X + ux, by = Y + uy;
-                    ui_quad(ax - uy, ay + ux, c, bx - uy, by + ux, c, bx + uy, by - ux, c, ax + uy, ay - ux, c);
-                }
-            }
-            lx = X; ly = Y; have = 1; pts++;
+        if (ch < 32 || ch > 126) ch = '?';
+        const FontGlyph *g = &FONT_GLYPH[ws][ch - 32];
+        if (g->x1 > g->x0) {
+            float x0 = pen + (float)g->ox * k, y0 = base + (float)g->oy * k;
+            float x1 = x0 + (float)(g->x1 - g->x0) * k, y1 = y0 + (float)(g->y1 - g->y0) * k;
+            float u0 = (float)g->x0 / FONT_TEX_W, v0 = (float)g->y0 / FONT_TEX_H, u1 = (float)g->x1 / FONT_TEX_W, v1 = (float)g->y1 / FONT_TEX_H;
+            TV a = { x0, y0, u0, v0, c }, b = { x1, y0, u1, v0, c }, d = { x1, y1, u1, v1, c }, e = { x0, y1, u0, v1, c };
+            r3d_text_tri(&a, &b, &d);
+            r3d_text_tri(&a, &d, &e);
         }
-        if (pts == 1) ui_rect(lx - h, ly - h, th, th, c);
-        cx += adv_of(ch) * k;
+        pen += g->adv * k + size * TRACKING;
     }
 }
 
@@ -282,7 +254,7 @@ void ui_text_r(const char *s, float rx, float y, float size, uint32_t c) { draw_
 
 static void shadow(const char *s, float x, float y, float size, uint32_t c)
 {
-    float o = size * 0.09f + 1.0f;
+    float o = size * 0.06f + 1.0f;
     uint32_t sc = RGBA(0, 0, 0, (int)((float)(c & 255) * 0.55f));
     draw_text(s, x + o, y + o, size, sc);
     draw_text(s, x, y, size, c);

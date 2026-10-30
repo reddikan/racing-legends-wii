@@ -104,103 +104,85 @@ static void loopify(float *x, int n, int fade)
 static void clear(int n) { memset(buf, 0, sizeof(float) * (size_t)n); }
 
 /* ------------------------------------------------------------------ */
-/* engines                                                             */
+/* hover turbines: one second loops, every partial a whole number of Hz so they loop seamlessly          */
 /* ------------------------------------------------------------------ */
-/* type 0: rally four, 1: big V8, 2: buggy flat-twin; on = under load */
-static void engine(int id, int type, int on)
+typedef struct { float hum, whine, blade, air, buzz, detune, lp; } Turbine;
+static const Turbine TURB[4] = {
+    /* hum (Hz), whine, blade pass, air band, mag buzz, detune, low pass */
+    { 110, 440, 1320, 900, 120, 0, 5200 },        /* COMET: a clean, mid turbine */
+    { 165, 660, 1980, 1400, 180, 0, 7000 },       /* VIPER: higher and sharper */
+    { 55, 275, 825, 600, 60, 0, 3200 },           /* TITAN: deep, heavy */
+    { 82, 328, 984, 760, 82, 1, 4200 },           /* FUTURE 88: a deep chorused synth hum */
+};
+
+static void turbine(int id, int type, int on)
 {
-    const int N = 32000;                    /* one second; the firing pattern repeats exactly within it */
-    float ffire = type == 0 ? 100.0f : (type == 1 ? 200.0f : 50.0f);
-    int cyl = type == 0 ? 4 : (type == 1 ? 8 : 2);
-    int pulses = (int)ffire;                /* per loop */
-    static float amp[400], off[400];
-    seed = 0xA5A5u + (uint32_t)(type * 77 + on * 13);
-    float cylvar[8];
-    for (int c = 0; c < cyl; c++) cylvar[c] = frand() * (on ? 0.12f : 0.2f);
-    static const float V8OFF[8] = { 0.0f, 0.13f, -0.06f, 0.16f, 0.0f, -0.11f, 0.05f, -0.13f };
-    for (int k = 0; k < pulses; k++) {
-        amp[k] = 1.0f + cylvar[k % cyl] + frand() * (on ? 0.06f : 0.12f);
-        off[k] = (type == 1 ? V8OFF[k % 8] * 0.5f : 0.0f) + frand() * 0.02f;
-        if (!on && (k % 7) == 3) amp[k] *= 0.6f;                 /* a lumpier overrun */
-    }
-    float per = SR / ffire;
-    /* excitation for three loops (filters reach a steady state; the middle loop is kept) */
-    int total = N * 3;
-    float *ex = tmp;
-    memset(ex, 0, sizeof(float) * (size_t)total);
-    float tau = (type == 2 ? 2.4f : 1.4f) * 0.001f * SR, ta = 0.00025f * SR;
-    for (int rep = 0; rep < 3; rep++)
-        for (int k = 0; k < pulses; k++) {
-            float t0 = (float)rep * (float)N + ((float)k + off[k]) * per;
-            int i0 = (int)t0;
-            float a = amp[k] * (on ? 1.0f : 0.55f);
-            for (int j = 0; j < (int)(tau * 6.0f); j++) {
-                int i = i0 + j;
-                if (i < 0 || i >= total) continue;
-                float t = (float)j - (t0 - (float)i0);
-                if (t < 0) continue;
-                ex[i] += a * expf(-t / tau) * (1.0f - expf(-t / ta));
-            }
-        }
-    /* periodic noise for the mechanical / combustion texture */
+    const int N = 32000;
+    const Turbine *T = &TURB[type];
+    seed = 0x5151u + (uint32_t)(type * 31 + on);
     static float nz[32000];
-    seed = 0x77u + (uint32_t)type;
     for (int i = 0; i < N; i++) nz[i] = frand();
-    Bq r1, r2, r3, lp, hp, nb, sub;
-    float res1 = ffire * (type == 1 ? 0.75f : 1.6f), res2 = ffire * (type == 1 ? 2.1f : 4.2f), res3 = type == 2 ? 1500.0f : 1150.0f;
-    bq_init(&r1, 1, res1, 1.6f);
-    bq_init(&r2, 1, res2, 2.4f);
-    bq_init(&r3, 1, res3, 3.0f);
-    bq_init(&lp, 0, on ? (type == 1 ? 2400.0f : 3200.0f) : 1400.0f, 0.707f);
-    bq_init(&hp, 2, 28.0f, 0.707f);
-    bq_init(&nb, 1, type == 2 ? 2600.0f : 3400.0f, 1.2f);
-    bq_init(&sub, 0, ffire * 0.6f, 0.9f);
-    float drive = on ? (type == 2 ? 3.2f : 2.4f) : 1.3f;
-    float g1 = type == 1 ? 1.6f : 1.0f, g2 = on ? 0.8f : 0.45f, g3 = on ? (type == 2 ? 0.55f : 0.35f) : 0.1f;
-    float env = 0;
-    for (int i = 0; i < total; i++) {
-        float x = ex[i];
-        env += (x - env) * 0.02f;
-        float n = nz[i % N] * env * (on ? 0.35f : 0.18f);
-        float y = bq(&r1, x) * g1 * 3.0f + bq(&r2, x + n) * g2 * 3.0f + bq(&r3, x * 0.6f + n * 2.0f) * g3 * 3.0f;
-        y += x * 0.35f;
-        y += bq(&sub, x) * (type == 1 ? 1.4f : 0.5f);
-        y += bq(&nb, nz[(i * 7) % N]) * env * (on ? 0.12f : 0.05f);      /* valvetrain */
-        y = tanhf(y * drive) / (drive > 1 ? 1.0f : 1.0f);
-        y = bq(&lp, y);
-        y = bq(&hp, y);
-        if (i >= N && i < 2 * N) buf[i - N] = y;
-    }
-    store(id, buf, N, 1, on ? 1.0f : 0.8f);
+    Bq air, lp, hp, crk;
+    bq_init(&air, 1, T->air, 1.4f);
+    bq_init(&lp, 0, on ? T->lp : T->lp * 0.55f, 0.707f);
+    bq_init(&hp, 2, 30.0f, 0.707f);
+    bq_init(&crk, 1, 3200.0f, 3.0f);
+    /* run twice through the filters (steady state), keep the second second */
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < N; i++) {
+            float t = (float)i / SR;
+            float v = 0;
+            /* the hum: fundamental + 2nd + 3rd, gently pulsing at 2 Hz (whole cycles per second) */
+            float pulse = 0.85f + 0.15f * sinf(TAU_F * 2.0f * t);
+            v += (sinf(TAU_F * T->hum * t) * 0.9f + sinf(TAU_F * T->hum * 2.0f * t) * 0.45f + sinf(TAU_F * T->hum * 3.0f * t) * 0.2f) * pulse;
+            if (T->detune) {
+                /* a second, slightly detuned saw-ish voice: the chorus */
+                float f2 = T->hum + 1.0f;
+                for (int h = 1; h <= 6; h++) v += sinf(TAU_F * f2 * (float)h * t) * 0.35f / (float)h;
+            }
+            /* the turbine whine and the blade-pass tone above it */
+            float wv = sinf(TAU_F * T->whine * t) * 0.5f + sinf(TAU_F * T->whine * 2.0f * t) * 0.12f;
+            float bl = sinf(TAU_F * T->blade * t) * (0.18f + 0.08f * sinf(TAU_F * 7.0f * t));
+            v += (wv + bl) * (on ? 1.0f : 0.45f);
+            /* the mag-lev field: a soft buzz */
+            float ph = T->buzz * t; ph -= floorf(ph);
+            v += (ph < 0.5f ? 0.12f : -0.12f) * (on ? 0.6f : 0.35f);
+            /* rushing air and a faint crackle of the field */
+            v += bq(&air, nz[i]) * (on ? 1.4f : 1.0f);
+            v += bq(&crk, nz[(i * 13) % N]) * 0.25f;
+            v = tanhf(v * (on ? 1.3f : 1.0f));
+            v = bq(&lp, v);
+            v = bq(&hp, v);
+            if (pass) buf[i] = v;
+        }
+    store(id, buf, N, 1, on ? 0.9f : 0.75f);
 }
 
 /* ------------------------------------------------------------------ */
 /* loops                                                               */
 /* ------------------------------------------------------------------ */
+/* the drift: the mag field scraping sideways - an electric sizzle with crackles and a shimmering whistle */
 static void skid_loop(void)
 {
     const int N = 32000, F = 3000;
     clear(N + F);
     seed = 991;
-    Bq h1, h2, am;
-    bq_init(&h1, 1, 1900.0f, 3.0f);
-    bq_init(&h2, 1, 700.0f, 1.5f);
-    bq_init(&am, 0, 14.0f, 0.7f);
-    float ph1 = 0, ph2 = 0, wob = 0, wv = 0;
+    Bq b1, b2, b3;
+    bq_init(&b1, 1, 2600.0f, 2.2f);
+    bq_init(&b2, 1, 5200.0f, 3.0f);
+    bq_init(&b3, 0, 400.0f, 0.8f);
+    float crack = 0, ph = 0, wob = 0, wv = 0;
     for (int i = 0; i < N + F; i++) {
-        /* a random-walk wobble on the squeal pitch */
-        wv += frand() * 0.004f; wv *= 0.995f; wob += wv; wob *= 0.9995f;
-        float f0 = 1080.0f + wob * 900.0f + 40.0f * sinf((float)i / SR * TAU_F * 7.3f);
-        ph1 += f0 / SR; ph1 -= floorf(ph1);
-        ph2 += f0 * 2.03f / SR; ph2 -= floorf(ph2);
-        float a = 0.65f + 0.35f * tanhf(bq(&am, frand()) * 40.0f);
-        float chatter = 0.8f + 0.2f * sinf((float)i / SR * TAU_F * 34.0f);
-        float tone = sinf(ph1 * TAU_F) * 0.55f + sinf(ph2 * TAU_F) * 0.18f;
+        if (frand() > 0.985f) crack = 0.7f + 0.3f * frand();
+        crack *= 0.9f;
+        wv += frand() * 0.003f; wv *= 0.996f; wob += wv; wob *= 0.9995f;
+        float f0 = 1900.0f + wob * 600.0f;
+        ph += f0 / SR; ph -= floorf(ph);
         float n = frand();
-        buf[i] = (tone * a * chatter + bq(&h1, n) * 1.4f + bq(&h2, n) * 0.6f);
+        buf[i] = bq(&b1, n) * 1.2f + bq(&b2, n * crack * 6.0f) * 0.9f + sinf(ph * TAU_F) * 0.18f + bq(&b3, n) * 0.4f;
     }
     loopify(buf, N, F);
-    store(SND_SKID, buf, N, 1, 0.85f);
+    store(SND_SKID, buf, N, 1, 0.75f);
 }
 
 static void gravel_loop(void)
@@ -345,6 +327,7 @@ static void oneshots(void)
     /* nitro: a thump and a rising rush */
     clear(secs(1.3f)); seed = 13;
     add_tone(0, 0.3f, 70, 45, 0.8f, 0.003f, 0.08f, 0);
+    add_tone(0, 0.4f, 300, 1800, 0.35f, 0.002f, 0.1f, 1);                  /* the field charging */
     add_noise(0, 1.2f, 1, 300, 2600, 0.7f, 1.4f, 0.04f, 0.45f);
     add_noise(0.02f, 0.9f, 2, 3000, 6000, 0.7f, 0.5f, 0.01f, 0.3f);
     add_noise(0, 1.2f, 0, 180, 300, 0.8f, 1.2f, 0.02f, 0.5f);
@@ -442,6 +425,39 @@ static void oneshots(void)
         }
         store(SND_CROWD, buf, n, 0, 0.8f);
     }
+    /* boost pad: a rising zip */
+    clear(secs(0.5f)); seed = 31;
+    add_tone(0, 0.35f, 500, 2400, 0.5f, 0.003f, 0.12f, 0);
+    add_noise(0, 0.4f, 1, 800, 5000, 1.2f, 0.9f, 0.005f, 0.12f);
+    store(SND_PAD, buf, secs(0.5f), 0, 0.7f);
+    /* boost ready: two soft blue notes */
+    clear(secs(0.5f));
+    add_tone(0, 0.3f, 1318, 1318, 0.4f, 0.004f, 0.1f, 0);
+    add_tone(0.08f, 0.35f, 1976, 1976, 0.4f, 0.004f, 0.14f, 0);
+    store(SND_READY, buf, secs(0.5f), 0, 0.45f);
+    /* 88 mph: a sonic boom - thump, crack, a rolling low tail and a bright sweep of shimmer */
+    {
+        int n = secs(2.4f);
+        clear(n); seed = 32;
+        add_tone(0, 0.6f, 70, 38, 1.4f, 0.002f, 0.18f, 0);
+        add_noise(0, 0.12f, 1, 3500, 1500, 0.8f, 1.6f, 0.0005f, 0.03f);
+        add_noise(0, 2.2f, 0, 600, 90, 0.7f, 1.2f, 0.01f, 0.6f);
+        add_noise(0.05f, 1.6f, 1, 1500, 9000, 1.5f, 0.45f, 0.05f, 0.45f);
+        add_tone(0.05f, 1.2f, 880, 3520, 0.18f, 0.05f, 0.35f, 1);
+        Bq f; bq_init(&f, 0, 9000, 0.7f);
+        for (int i = 0; i < n; i++) buf[i] = bq(&f, tanhf(buf[i] * 1.4f));
+        store(SND_SONIC, buf, n, 0, 1.0f);
+    }
+    /* the code unlock: a rising sparkle and a whoosh */
+    {
+        int n = secs(1.8f);
+        clear(n); seed = 33;
+        const float notes[6] = { 523, 659, 784, 1047, 1319, 1568 };
+        for (int k = 0; k < 6; k++) add_tone((float)k * 0.07f, 1.0f, notes[k], notes[k], 0.3f, 0.003f, 0.35f, 1);
+        add_noise(0, 1.2f, 1, 400, 6000, 0.9f, 0.6f, 0.08f, 0.35f);
+        add_tone(0.45f, 1.2f, 2093, 2093, 0.25f, 0.005f, 0.5f, 0);
+        store(SND_UNLOCK, buf, n, 0, 0.9f);
+    }
     /* interface */
     clear(secs(0.06f));
     add_tone(0, 0.05f, 1500, 1300, 0.6f, 0.001f, 0.015f, 0);
@@ -473,12 +489,14 @@ void audio_init(void)
         tmp2 = (float *)big_alloc(sizeof(float) * MAXN);
     }
     pool_used = 0;
-    engine(SND_ENG_A_ON, 0, 1);
-    engine(SND_ENG_A_OFF, 0, 0);
-    engine(SND_ENG_B_ON, 1, 1);
-    engine(SND_ENG_B_OFF, 1, 0);
-    engine(SND_ENG_C_ON, 2, 1);
-    engine(SND_ENG_C_OFF, 2, 0);
+    turbine(SND_ENG_A_ON, 0, 1);
+    turbine(SND_ENG_A_OFF, 0, 0);
+    turbine(SND_ENG_B_ON, 1, 1);
+    turbine(SND_ENG_B_OFF, 1, 0);
+    turbine(SND_ENG_C_ON, 2, 1);
+    turbine(SND_ENG_C_OFF, 2, 0);
+    turbine(SND_ENG_D_ON, 3, 1);
+    turbine(SND_ENG_D_OFF, 3, 0);
     skid_loop();
     gravel_loop();
     nitro_loop();

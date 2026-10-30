@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 #include "../source/audio.h"
 
 void swr_render(void);
@@ -40,11 +41,10 @@ static void bot_input(Input *in, int drift_ok)
     car_ai_input(c, 1.0f / 60.0f);
     c->ai = was; c->skill = sk; c->lane = ln;
     in->sx = c->in.steer;
-    if (c->in.throttle > 0.5f) in->held |= BTN_R;
-    in->rt = c->in.throttle;
+    if (c->in.throttle > 0.5f) in->held |= BTN_A;
     if (c->in.brake > 0.3f || (drift_ok && c->in.drift)) in->held |= BTN_L;
     in->lt = (c->in.brake > 0.3f || (drift_ok && c->in.drift)) ? 1.0f : 0.0f;
-    if (c->in.nitro) in->pressed |= BTN_A;
+    if (c->in.nitro) in->pressed |= BTN_R;
 }
 
 /* a small software mixer that does what main.c does with ASND, for the preview video's soundtrack */
@@ -128,6 +128,9 @@ static void run_race(int track, int laps, const uint8_t *lv, int verbose, float 
         frames++;
         if (cars[0].impact > 0) wall_frames++;
         if (cars[0].offroad) { off_frames++; if (off_frames % 30 == 1 && getenv("DBG")) printf("    off: sample %d lat %.1f hw %.1f line %.1f speed %.1f drifting %d steer %.2f curv %.4f t %.1f\n", cars[0].sample, cars[0].lat, trk.s[cars[0].sample].hw, trk.s[cars[0].sample].line, cars[0].speed, cars[0].drifting, cars[0].in.steer, trk.s[cars[0].sample].curv, g.race_t); }
+        if (getenv("DBG2") && g.race_t > 76.5f && g.race_t < 81.0f && frames % 6 == 0)
+            printf("    t %.2f s %d lat %.1f line %.1f v %.1f vline %.1f steer %.2f drift %d boost %.2f mini %.2f imp %.2f\n", g.race_t, cars[0].sample, cars[0].lat,
+                   trk.s[cars[0].sample].line, cars[0].speed, trk.s[cars[0].sample].vline, cars[0].in.steer, cars[0].drifting, cars[0].boost_t, cars[0].mini_t, cars[0].impact);
         if (cars[0].drifting) drift_frames++;
         for (int q = 1; q < ncars; q++) if (cars[q].offroad) ai_off++;
     }
@@ -219,6 +222,37 @@ int main(int argc, char **argv)
         }
         return 0;
     }
+    if (!strcmp(mode, "fx")) {
+        /* the code on the title screen, then a race: grab the 88 mph moment and a boost */
+        for (int i = 0; i < 60; i++) step(&in);
+        const uint32_t code[10] = { BTN_UP, BTN_UP, BTN_DOWN, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_LEFT, BTN_RIGHT, BTN_B, BTN_A };
+        for (int k = 0; k < 10; k++) { memset(&in, 0, sizeof in); in.pressed = code[k]; step(&in); memset(&in, 0, sizeof in); for (int i = 0; i < 6; i++) step(&in); }
+        printf("secret %d unlock_t %.2f\n", sv.secret, g.unlock_t);
+        for (int i = 0; i < 80; i++) step(&in);
+        shot("fx_unlock");
+        in.pressed = BTN_A; step(&in); in.pressed = 0;
+        sv.body = BODY_FUTURE88;
+        uint8_t lv[NUM_UPGRADES] = { 2, 2, 2, 2, 2, 2 };
+        memcpy(sv.lv, lv, sizeof lv);
+        g.loading_track = only >= 0 ? only : 3; g.state = ST_LOADING; g.loading_frames = 0;
+        for (int i = 0; i < 4; i++) step(&in);
+        in.pressed = BTN_A; step(&in); in.pressed = 0;
+        int got88 = 0, gotb = 0, n88 = 0, nb = 0;
+        float minspeed = 1e9f;
+        for (int f = 0; f < 60 * 60 && g.state == ST_RACE; f++) {
+            if (g.phase == RP_RACE) bot_input(&in, 1); else { memset(&in, 0, sizeof in); if (g.phase == RP_COUNT) { if (cars[0].speed < minspeed) minspeed = cars[0].speed; } }
+            /* pre-race check: nobody may move */
+            if (g.phase != RP_RACE) for (int q = 0; q < ncars; q++) if (fabsf(cars[q].vx) + fabsf(cars[q].vz) > 0.01f) { printf("car %d moving before GO!\n", q); break; }
+            float prev88 = g.mph88_t, prevb = g.boost_anim;
+            step(&in);
+            if (g.mph88_t > 0 && prev88 == 0) n88++;
+            if (g.boost_anim > prevb + 0.3f) nb++;
+            if (!got88 && g.mph88_t > 0.18f) { shot("fx_88mph"); got88 = 1; }
+            if (!gotb && g.boost_anim > 0.75f && g.boost_anim < 0.85f) { shot("fx_boost"); gotb = 1; }
+        }
+        printf("88 mph moments %d, boosts %d\n", n88, nb);
+        return 0;
+    }
     if (!strcmp(mode, "cmp")) {
         uint8_t lv[NUM_UPGRADES] = { 0, 0, 0, 0, 0, 0 };
         for (int d = 0; d < 2; d++) {
@@ -241,7 +275,7 @@ int main(int argc, char **argv)
         for (int f = 0; f < 60 * 34; f++) {
             if (g.phase == RP_INTRO || g.phase == RP_COUNT) memset(&in, 0, sizeof in);
             else bot_input(&in, 1);
-            if (g.phase == RP_COUNT && g.phase_t > 2.4f) in.held |= BTN_R;
+            if (g.phase == RP_COUNT && g.phase_t > 2.4f) { in.held |= BTN_A; if (g.phase_t < 2.43f) in.pressed |= BTN_A; }
             step(&in);
             if (f % 2 == 0) {
                 game_render(); swr_render();

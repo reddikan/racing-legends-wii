@@ -61,6 +61,8 @@ float track_height(float x, float z);                  /* the ground: terrain or
 int   track_locate(int hint, float x, float z, float *lat, float *along);
 void  track_point(float dist, float lat, float *x, float *z);     /* position from distance + offset */
 int   track_sample_at(float dist);
+int   track_is_boost(int sample);                   /* a boost pad on this sample? */
+float track_pad_lat(int sample);                    /* lateral centre of the pads there */
 void  track_draw_world(void);                          /* queue the static world (culled) */
 void  track_draw_glows(float t);                        /* lamps, neon, water sparkle (dynamic) */
 /* the lit colour of a surface with albedo `c`, normal n, at position p (baked lighting) */

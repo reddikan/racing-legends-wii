@@ -1,5 +1,5 @@
 /*
- * RACING LEGENDS - the race HUD: position and standings, lap and times, the speedometer and nitro tanks,
+ * RACING LEGENDS - the race HUD: position and standings, lap and times, the speedometer and the boost gauge,
  * the minimap, name tags, the countdown, drift popups and the pause menu.
  */
 #include "game_int.h"
@@ -16,7 +16,7 @@
 
 static const char *ORD[9] = { "", "ST", "ND", "RD", "TH", "TH", "TH", "TH", "TH" };
 
-float hud_speed_units(float mps) { return sv.units ? mps * 3.6f * 1.25f * 0.6214f : mps * 3.6f * 1.25f; }
+float hud_speed_units(float mps) { return sv.units ? mps * MPS_TO_MPH : mps * MPS_TO_MPH * 1.609f; }
 
 const char *hud_time(float t, char *buf)
 {
@@ -118,16 +118,20 @@ static void draw_speedo(const Car *pl)
     ui_circle(cx, cy, r + 8, 0x0A0E1ACCu);
     ui_ring(cx, cy, r + 8, 2, 0xFFFFFF22u);
     float a0 = PI * 0.75f, a1 = PI * 2.25f;
-    float vmax = pl->st.vmax * 1.3f;
-    float f = sat(pl->speed / vmax);
+    float mph = pl->speed * MPS_TO_MPH;
+    float f = sat(mph / 160.0f);                         /* the dial runs 0 - 160 mph */
     ui_arc(cx, cy, r - 7, r, a0, a1, 32, 0x2A3048FFu, 0x2A3048FFu);
-    /* ticks */
-    for (int i = 0; i <= 10; i++) {
-        float a = a0 + (a1 - a0) * (float)i / 10.0f, ca = cosf(a), sa = sinf(a);
-        ui_line(cx + ca * (r - 14), cy + sa * (r - 14), cx + ca * (r - 9), cy + sa * (r - 9), i % 5 ? 1.5f : 2.5f, 0xFFFFFF80u);
+    /* ticks every 20 mph, and the 88 mark */
+    for (int i = 0; i <= 8; i++) {
+        float a = a0 + (a1 - a0) * (float)i / 8.0f, ca = cosf(a), sa = sinf(a);
+        ui_line(cx + ca * (r - 14), cy + sa * (r - 14), cx + ca * (r - 9), cy + sa * (r - 9), i % 2 ? 1.5f : 2.5f, 0xFFFFFF80u);
+    }
+    {
+        float a = a0 + (a1 - a0) * (88.0f / 160.0f), ca = cosf(a), sa = sinf(a);
+        ui_line(cx + ca * (r - 16), cy + sa * (r - 16), cx + ca * (r + 3), cy + sa * (r + 3), 3.0f, mph >= 88.0f ? 0xBFF4FFFFu : 0x3AD8FFFFu);
     }
     if (f > 0.005f) {
-        uint32_t ce = pl->boost_t > 0 ? 0x5AB8FFFFu : col_mix(CYAN, 0xFF4A3AFFu, sat((f - 0.55f) * 2.2f));
+        uint32_t ce = pl->boost_t > 0 ? 0xBFF4FFFFu : col_mix(CYAN, 0x3A7AFFFFu, sat((f - 0.55f) * 2.2f));
         ui_arc(cx, cy, r - 7, r, a0, a0 + (a1 - a0) * f, 28, CYAN, ce);
         ui_begin(RM_ADD);
         float ae = a0 + (a1 - a0) * f;
@@ -139,31 +143,29 @@ static void draw_speedo(const Car *pl)
     ui_text_c(buf, cx, cy - 16, 26, WHITE);
     ui_text_weight(1.0f);
     ui_text_c(sv.units ? "MPH" : "KM/H", cx, cy + 16, 9, DIM);
-    sprintf(buf, "%d", pl->gear);
-    ui_rrect(cx - 10, cy + 31, 20, 18, 4, 0x2A3150FFu);
-    ui_text_c(buf, cx, cy + 35, 10, YELLOW);
 
-    /* nitro tanks */
-    float nx = 166, ny = VH - 46;
-    int tanks = (int)pl->st.tank;
-    ui_text_s("NITRO", nx + 6, ny - 20, 10, CYAN);
-    ui_text_s("A", nx + 64, ny - 20, 10, WHITE);
-    for (int i = 0; i < tanks; i++) {
-        float x = nx + (float)i * 34;
-        float fill = clampf(pl->nitro - (float)i, 0, 1);
-        ui_slant(x, ny, 30, 20, 6, 0x0A0E1ACCu);
-        if (fill > 0) {
-            uint32_t c = fill >= 1.0f ? 0x3AB8FFFFu : 0x2A6AA8FFu;
-            ui_slant_h(x + 2, ny + 3, 26 * fill, 14, 4.8f, c, fill >= 1.0f ? 0x8AE8FFFFu : c);
-            if (fill >= 1.0f) {
-                ui_begin(RM_ADD);
-                ui_glow(x + 17, ny + 10, 18, 0x3AB8FF50u);
-                ui_begin(RM_ALPHA);
-            }
-        }
-    }
+    /* the boost gauge: fills while it recharges, glows when it's ready */
+    float nx = 168, ny = VH - 48, bw = 170, bh = 18;
+    ui_slant(nx, ny, bw, bh, 7, 0x0A0E1ACCu);
     if (pl->boost_t > 0) {
-        ui_slant_h(nx, ny + 24, 34.0f * (float)tanks * sat(pl->boost_t / 1.5f), 4, 2, 0x8AE8FFFFu, 0x3A7AFFFFu);
+        float k = sat(pl->boost_t / BOOST_TIME);
+        ui_slant_h(nx + 3, ny + 3, (bw - 6) * k, bh - 6, 5, 0xFFFFFFFFu, 0x6AD8FFFFu);
+        ui_text_weight(1.4f);
+        ui_text_s("BOOST!", nx + 4, ny - 22, 14, 0xBFF4FFFFu);
+        ui_text_weight(1.0f);
+    } else if (pl->nitro >= 1.0f) {
+        float p = 0.75f + 0.25f * sinf(g.t * 8.0f);
+        ui_slant_h(nx + 3, ny + 3, bw - 6, bh - 6, 5, col_a(0x3AB8FFFFu, p), col_a(0xBFF4FFFFu, p));
+        ui_begin(RM_ADD);
+        ui_glow(nx + bw * 0.5f, ny + bh * 0.5f, 70, col_a(0x3AB8FF40u, p));
+        ui_begin(RM_ALPHA);
+        ui_text_weight(1.4f);
+        ui_text_s("BOOST READY", nx + 4, ny - 22, 14, CYAN);
+        ui_text_weight(1.0f);
+        ui_text_s("R", nx + bw - 6, ny - 22, 14, WHITE);
+    } else {
+        ui_slant_h(nx + 3, ny + 3, (bw - 6) * pl->nitro, bh - 6, 5, 0x1A4A8AFFu, 0x2A7AC8FFu);
+        ui_text_s("RECHARGING", nx + 4, ny - 20, 11, DIM);
     }
     /* drift meter while sliding */
     if (pl->drifting) {
@@ -232,7 +234,6 @@ void hud_minimap(float x, float y, float w, float h, int dots)
 static void draw_minimap(void)
 {
     float w = 168, h = 128, x = VW - w - 18, y = VH - h - 16;
-    ui_slant(x - 6, y - 6, w + 12, h + 12, 8, 0x0A0E1A90u);
     hud_minimap(x + 6, y + 4, w - 12, h - 8, 1);
 }
 
@@ -337,6 +338,59 @@ static void draw_finish(const Car *pl)
     ui_text_sc(sub, VW * 0.5f, 250, 13, col_a(DIM, a));
 }
 
+/* streaks of light rushing out from the middle of the screen */
+static void speed_lines(float k, uint32_t col)
+{
+    if (k <= 0.01f) return;
+    ui_begin(RM_ADD);
+    float cx = VW * 0.5f, cy = VH * 0.56f;
+    for (int i = 0; i < 44; i++) {
+        uint32_t h = hash32((uint32_t)i * 2654435761u);
+        float a = (float)(h & 1023) / 1024.0f * TAU;
+        float speed = 1.4f + (float)((h >> 10) & 255) / 255.0f * 1.6f;
+        float ph = fmodf(g.t * speed + (float)((h >> 18) & 255) / 255.0f, 1.0f);
+        float r0 = 220.0f + ph * 420.0f, len = 60.0f + 140.0f * ph;
+        float ca = cosf(a), sa = sinf(a) * 0.72f;
+        float w = 1.2f + 2.2f * ph;
+        float x0 = cx + ca * r0, y0 = cy + sa * r0, x1 = cx + ca * (r0 + len), y1 = cy + sa * (r0 + len);
+        float nx = -sa * w, ny = ca * w;
+        uint32_t c0 = col_a(col, 0.0f), c1 = col_a(col, k * (0.25f + 0.55f * ph));
+        ui_quad(x0, y0, c0, x1 + nx, y1 + ny, c1, x1 - nx, y1 - ny, c1, x0, y0, c0);
+    }
+    ui_begin(RM_ALPHA);
+}
+
+/* 88 MPH: the number slams in with chromatic copies, a light bar sweeps across, the edges flash */
+static void draw_88(void)
+{
+    float t = g.mph88_t;
+    if (t <= 0) return;
+    float in = smooth01(t * 7.0f), out = 1.0f - smooth01((t - 1.15f) * 2.5f);
+    float a = in * out;
+    float sc = 1.0f + (1.0f - smooth01(t * 5.0f)) * 1.4f;
+    float y = 96.0f - 26.0f * (sc - 1.0f);
+    /* the light bar */
+    float bar = smooth01(t * 3.0f);
+    ui_begin(RM_ADD);
+    ui_rect_h(VW * 0.5f - 300 * bar, 112, 300 * bar, 3, 0x3AD8FF00u, col_a(0x9AE8FFFFu, a));
+    ui_rect_h(VW * 0.5f, 112, 300 * bar, 3, col_a(0x9AE8FFFFu, a), 0x3AD8FF00u);
+    ui_rect_h(VW * 0.5f - 300 * bar, 172, 300 * bar, 2, 0x3AD8FF00u, col_a(0x3A8AFFFFu, a));
+    ui_rect_h(VW * 0.5f, 172, 300 * bar, 2, col_a(0x3A8AFFFFu, a), 0x3AD8FF00u);
+    /* the screen edges flash blue as it hits */
+    float f = (1.0f - smooth01(t * 3.0f)) * 0.8f;
+    ui_rect_h(0, 0, 160, VH, col_a(0x3A8AFFFFu, f), 0x3A8AFF00u);
+    ui_rect_h(VW - 160, 0, 160, VH, 0x3A8AFF00u, col_a(0x3A8AFFFFu, f));
+    ui_rect_v(0, 0, VW, 90, col_a(0x6AC8FFFFu, f * 0.7f), 0x6AC8FF00u);
+    float o = 3.0f + (1.0f - in) * 18.0f + (t < 0.5f ? 2.5f * sinf(t * 60.0f) : 0.0f);
+    ui_text_weight(1.6f);
+    ui_text_c("88 MPH", VW * 0.5f - o, y, 52 * sc, col_a(0x2AF0FFFFu, 0.75f * a));
+    ui_text_c("88 MPH", VW * 0.5f + o, y, 52 * sc, col_a(0x3A4AFFFFu, 0.75f * a));
+    ui_begin(RM_ALPHA);
+    ui_text_sc("88 MPH", VW * 0.5f, y, 52 * sc, col_a(0xFFFFFFFFu, a));
+    ui_text_weight(1.0f);
+    if (t > 0.25f) ui_text_sc("SPEED BARRIER BROKEN", VW * 0.5f, 180, 13, col_a(0xBFEFFFFFu, a * smooth01((t - 0.25f) * 5.0f)));
+}
+
 static void draw_pause(void)
 {
     ui_rect(0, 0, VW, VH, 0x05070CA8u);
@@ -367,7 +421,15 @@ void hud_draw(void)
     draw_popups();
     if (g.wrong_t > 1.5f && ((int)(g.t * 3) & 1)) ui_text_sc("WRONG WAY!", VW * 0.5f, 210, 34, 0xFF4A3AFFu);
     if (g.phase == RP_DONE) draw_finish(pl);
-    /* nitro screen flash */
+    /* boosts and 88 mph: speed lines and the 88 overlay */
+    {
+        float k = 0;
+        if (pl->boost_t > 0) k = 0.55f + 0.45f * sat(g.boost_anim);
+        if (g.mph88_t > 0) k = fmaxf(k, 1.0f - smooth01(g.mph88_t / 1.3f));
+        speed_lines(k, pl->livery == LIVERY_SIGNATURE ? 0x6AB8FFFFu : 0xBFEFFFFFu);
+        draw_88();
+    }
+    /* boost screen flash */
     if (g.nitro_flash > 0) {
         ui_begin(RM_ADD);
         float a = g.nitro_flash;

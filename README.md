@@ -1,59 +1,76 @@
 # RACING LEGENDS
 
-A fun, top-down 3D drift racer for the Nintendo Wii (homebrew). Play it in Dolphin or on a real Wii with the **Classic Controller**.
+A top-down 3D hover racer for the Nintendo Wii (homebrew). Play it in Dolphin or on a real Wii with the **Classic Controller**.
 
-Drift through the corners, chain nitro boosts, and spend your winnings in the garage — the later tracks need a faster car.
+Glide anti-gravity craft along elevated neon decks, drift through the corners, fire your boost, and spend your winnings in the garage. The later tracks need a faster craft. The look is a grungy, glowing miniature: tilt-shift blur, film grain, RGB split, soft focus and neon bloom.
 
 ## Controls (Classic Controller)
 
 | Button | Does |
 | --- | --- |
-| **R / ZR** | accelerate (the analog R trigger works as a throttle) |
+| **A** | accelerate |
+| **R / ZR** | boost — unlimited, but it recharges after every use |
 | **L / ZL** | brake / reverse — **hold it while steering to drift** |
 | Left stick / D-Pad | steer |
-| **A** | nitro boost (uses one tank) |
 | **B** | hop — hop then hold L to start a drift at lower speed |
 | **X** | change camera (follow / fixed top-down / close chase) |
 | **Y** | horn |
 | + | pause |
-| − | put your car back on the track |
+| − | put your craft back on the track |
 | HOME | exit |
 
-A GameCube controller also works (A nitro, B hop, X camera, Y horn, R/L analog triggers, START pause, Z reset).
+A GameCube controller also works (A accelerate, R boost, L brake / drift, B hop, X camera, Y horn, START pause, Z reset).
 
 ## How it plays
 
-- **Drifting** charges up as you slide: blue sparks, then orange, then purple. Let go of L for a mini-turbo — the bigger the drift, the bigger the boost — and some nitro back in the tank.
-- **Nitro** comes in tanks. Drifts and slipstreaming right behind a rival refill them.
-- **Rocket start**: hit the throttle right as the lights go green.
-- Finish in the **top 3** to unlock the next track. Every race pays credits (plus a drift bonus).
+- **Boost** never runs out. Each use empties the gauge, which then recharges. The HUD shows **BOOST READY** when you can fire again. Drifting and slipstreaming behind a rival speed up the recharge, and the Recharge upgrade shortens it.
+- **Drifting** charges up as you slide: blue sparks, then orange, then purple. Let go of L for a mini-turbo. The bigger the drift, the bigger the kick.
+- **Boost pads** on the straights give a quick burst of speed.
+- **88 MPH**: hit 88 and the screen lights up.
+- **Rocket start**: press A just before the lights go green.
+- Finish in the **top 3** to unlock the next track. Every race pays credits, plus a drift bonus.
 
 ## The garage
 
-Upgrades are what make the car faster: **Engine** (top speed), **Turbo** (acceleration), **Tires** (grip and handling), **Nitro Tank** (more boosts), **Nitro Power** (stronger boosts) and **Drift Kit** (drifts charge faster and bank more nitro). Four cars to drive (Hornet RS, Thunder V8, Baja Buggy, Apex GT), twelve paint colors, accent colors and liveries.
+Upgrades are what make your craft faster:
+
+- **Engine**: top speed
+- **Thrusters**: acceleration
+- **Mag Grip**: grip and handling
+- **Recharge**: the boost comes back sooner
+- **Boost Power**: stronger boosts
+- **Drift Kit**: drifts charge faster
+
+There are three craft to buy (**Comet**, **Viper**, **Titan**), plus paint colors, accents and liveries.
+
+### The hidden craft
+
+On the title screen, enter **Up, Up, Down, Down, Left, Right, Left, Right, B, A** to unlock **FUTURE 88**, a liquid-silver arrowhead with neon-blue light trails.
 
 ## The tracks
 
-1. **Pinewood Lake** — a sunny forest circuit by a lake (asphalt)
-2. **Red Rock Canyon** — a dusty desert run between red cliffs (dirt)
-3. **Frostpeak Pass** — snowbound mountain roads (snow, slippery)
-4. **Neon Harbor** — city streets at night: street lamps, neon, the harbor (asphalt, night)
-5. **Lantern Valley** — a midnight dirt rally lit by lanterns, campfires and floodlights (dirt, night)
+1. **Skyline Sprint**: Orbital Gardens, a sky-garden circuit above the trees
+2. **Mesa Prime**: dusk on a red planet
+3. **Cryo Station**: an ice planet ring
+4. **Neon Metro**: a megacity at night
+5. **Magma Rift**: a volcanic moon at night
 
-At night every car runs its headlights.
+At night every craft runs its headlights.
 
 ## Sound
 
-No music, just racing: engines (a rally four, a big V8 and a buggy flat-twin, each with on/off-throttle layers and a 5-speed gearbox), tire squeal, gravel, nitro, wind, barrier scrapes, impacts, backfires, the turbo blow-off, countdown beeps and the crowd. All of it is synthesized when the game starts.
+There's no music, just racing sounds: hover turbines (a different voice for each craft), electric drift sizzle, the boost roar and its recharge chime, boost pads, energy-wall scrapes, impacts, the 88 mph sonic boom, countdown beeps and the crowd. All of it is synthesized when the game starts.
 
 ## Saving
 
-Credits, upgrades, cars, paint, unlocked tracks, records and options save to `sd:/apps/racinglegends/save.dat`. In Dolphin this needs the virtual SD card (*Config > Wii > SD Card*, on by default in recent versions).
+Credits, upgrades, craft, paint, unlocked tracks, records and options save to `sd:/apps/racinglegends/save.dat`. In Dolphin this needs the virtual SD card (*Config > Wii > SD Card*, on by default in recent versions). A v1 save carries over: the track records reset, and the price of a v1-only car is refunded.
 
 ## Building
 
-With devkitPro installed: `make` builds `boot.dol` and an `apps/racinglegends/` folder for a real Wii's SD card.
+With devkitPro installed, `make` builds `boot.dol` and an `apps/racinglegends/` folder for a real Wii's SD card.
 
-Pushed to GitHub, the Actions workflow builds the game in the devkitPro container and publishes it as `racinglegends_v1.dol` on the **v1** release.
+When pushed to GitHub, the Actions workflow builds the game in the devkitPro container. It publishes the result as `racinglegends_v2.dol` on the **v2** release.
 
-`sh tools/run_tests.sh shots|bots|reel` runs the native test harness (software renderer + bot drivers) — no Wii needed.
+`sh tools/run_tests.sh shots|bots|reel|fx` runs the native test harness (a software renderer plus bot drivers). No Wii is needed.
+
+The HUD font is Bebas Neue by Dharma Type, under the SIL Open Font License (`tools/fonts/OFL.txt`).

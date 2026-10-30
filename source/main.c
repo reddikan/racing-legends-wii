@@ -1,9 +1,11 @@
 /*
  * RACING LEGENDS - Nintendo Wii platform layer (devkitPPC + libogc + libfat).
  *
- *   video : 3D through GX - the track's static chunks are GPU display lists (in main memory), cars / particles / glows are
- *           sent each frame, the HUD is a 2D layer on top. Depth buffered, alpha / additive / 2x-multiply
- *           blending, a tilt-shift blur pass, 60 fps, 16:9 anamorphic or letterboxed 4:3
+ *   video : 3D through GX - the track's static chunks are GPU display lists (in MEM2), craft / particles /
+ *           glows are sent each frame, the HUD is a 2D layer on top (text from a Bebas Neue atlas). Depth
+ *           buffered, alpha / additive / 2x-multiply blending, a detail texture on the ground, then the film
+ *           look from copies of the frame: bloom, vignette, tilt-shift, soft focus, halation, RGB split,
+ *           lifted blacks and grain. 60 fps, 16:9 anamorphic or letterboxed 4:3
  *   input : Wii Classic Controller (in Wii Remote 1); a GameCube controller works too
  *   audio : ASND - ten looping voices (engines, tyres, nitro, wind...) whose pitch and volume follow the
  *           game every frame, six voices for one-shot effects
@@ -26,6 +28,7 @@
 #include "r3d.h"
 #include "ui.h"
 #include "audio.h"
+#include "font_bebas.h"
 
 #define FIFO_SIZE (1024 * 1024)
 #define SAVE_DIR  "sd:/apps/racinglegends"
@@ -134,7 +137,7 @@ static void video_init(void)
 /* ------------------------------------------------------------------ */
 /* static meshes: GPU display lists in MEM2                            */
 /* ------------------------------------------------------------------ */
-#define DL_POOL (12u * 1024u * 1024u)
+#define DL_POOL (15u * 1024u * 1024u)
 #define MAX_MESH 2048
 typedef struct { void *dl; u32 len; const RV *imm; int n; } Mesh;
 static Mesh meshes[MAX_MESH];
@@ -155,11 +158,7 @@ void plat_mesh_reset(void)
 int plat_mesh_create(const RV *v, int n)
 {
     if (nmesh >= MAX_MESH || n < 3) return -1;
-    if (!dl_pool) {
-        /* main memory if there's room, MEM2 otherwise */
-        dl_pool = (u8 *)memalign(32, DL_POOL);
-        if (!dl_pool) dl_pool = (u8 *)big_alloc(DL_POOL);
-    }
+    if (!dl_pool) dl_pool = (u8 *)big_alloc(DL_POOL);
     n -= n % 3;
     u32 batches = (u32)(n / 65520 + 1);
     u32 size = ((u32)n * 16u + batches * 3u + 31u) & ~31u;
@@ -196,68 +195,336 @@ int plat_mesh_create(const RV *v, int n)
 }
 
 /* ------------------------------------------------------------------ */
-/* tilt-shift: a half-size copy of the frame blended over its top and bottom */
+/* textures: the font atlas, the ground detail, film grain, and the   */
+/* copies of the frame the post-processing works from                  */
 /* ------------------------------------------------------------------ */
-static void *tex_b;
-static GXTexObj to_b;
-static int cur_2d = -1, cur_mode = -1;
+static GXTexObj to_font, to_detail, to_grain;
+static void *tex_full, *tex_half, *tex_q, *tex_bq;
+static GXTexObj to_full, to_half, to_q, to_bq;
+static int cur_2d = -1, cur_mode = -1, cur_tev = -1;
+static int post_bloomed, post_grunged, have_q;
+static u32 frame_no;
 
-static void post_init(void)
+/* a linear 8-bit image into the GPU's tiled I8 layout (8 x 4 texel blocks) */
+static void *make_i8(const u8 *src, int w, int h)
 {
-    tex_b = memalign(32, GX_GetTexBufferSize(320, 240, GX_TF_RGB565, GX_FALSE, 0));
+    u8 *dst = memalign(32, (size_t)(w * h));
+    int k = 0;
+    for (int by = 0; by < h; by += 4)
+        for (int bx = 0; bx < w; bx += 8)
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 8; x++) dst[k++] = src[(by + y) * w + bx + x];
+    DCFlushRange(dst, (u32)(w * h));
+    return dst;
+}
+
+static void textures_init(void)
+{
+    void *f = make_i8(FONT_TEX, FONT_TEX_W, FONT_TEX_H);
+    GX_InitTexObj(&to_font, f, FONT_TEX_W, FONT_TEX_H, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GX_InitTexObjLOD(&to_font, GX_LINEAR, GX_LINEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
+    static u8 raw[R_DETAIL_SIZE * R_DETAIL_SIZE];
+    r3d_make_detail(raw);
+    void *d = make_i8(raw, R_DETAIL_SIZE, R_DETAIL_SIZE);
+    GX_InitTexObj(&to_detail, d, R_DETAIL_SIZE, R_DETAIL_SIZE, GX_TF_I8, GX_REPEAT, GX_REPEAT, GX_FALSE);
+    GX_InitTexObjLOD(&to_detail, GX_LINEAR, GX_LINEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
+    static u8 gr[R_GRAIN_SIZE * R_GRAIN_SIZE];
+    r3d_make_grain(gr);
+    void *gt = make_i8(gr, R_GRAIN_SIZE, R_GRAIN_SIZE);
+    GX_InitTexObj(&to_grain, gt, R_GRAIN_SIZE, R_GRAIN_SIZE, GX_TF_I8, GX_REPEAT, GX_REPEAT, GX_FALSE);
+    GX_InitTexObjLOD(&to_grain, GX_NEAR, GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
+
+    tex_full = memalign(32, GX_GetTexBufferSize(640, 528, GX_TF_RGBA8, GX_FALSE, 0));
+    tex_half = memalign(32, GX_GetTexBufferSize(320, 264, GX_TF_RGB565, GX_FALSE, 0));
+    tex_q    = memalign(32, GX_GetTexBufferSize(160, 132, GX_TF_RGB565, GX_FALSE, 0));
+    tex_bq   = memalign(32, GX_GetTexBufferSize(160, 132, GX_TF_RGB565, GX_FALSE, 0));
+
     Mtx m;
     guMtxIdentity(m);
     GX_LoadTexMtxImm(m, GX_TEXMTX0, GX_MTX2x4);
+    /* the ground's detail: texture coordinates straight from world x and z */
+    float k = R_DETAIL_TEXELS_PER_M / (float)R_DETAIL_SIZE;
+    Mtx gm = { { k, 0, 0, 0 }, { 0, 0, k, 0 }, { 0, 0, 0, 1 } };
+    GX_LoadTexMtxImm(gm, GX_TEXMTX1, GX_MTX2x4);
 }
 
-static void load_2d(void);
+/* ---- TEV setups ---- */
+enum { TEV_PLAIN, TEV_GROUND, TEV_TEXT, TEV_TEXMOD, TEV_THRESH };
 
-static void post_apply(void)
+static void vtx_tex(void)
 {
-    u32 w = rmode->fbWidth, h = rmode->efbHeight, top = 0;
-    if (!wide) { u32 bh = (h * 3 / 4) & ~3u; top = ((h - bh) / 2) & ~1u; h = bh; }
-    GX_SetTexCopySrc(0, top, w, h);
-    GX_SetTexCopyDst(w / 2, h / 2, GX_TF_RGB565, GX_TRUE);
-    GX_CopyTex(tex_b, GX_FALSE);
-    GX_PixModeSync();
-    GX_InvalidateTexAll();
-    GX_InitTexObj(&to_b, tex_b, (u16)(w / 2), (u16)(h / 2), GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
-    GX_InitTexObjLOD(&to_b, GX_LINEAR, GX_LINEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    load_2d();
-    GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     GX_ClearVtxDesc();
     GX_SetVtxDesc(GX_VA_POS, GX_DIRECT);
     GX_SetVtxDesc(GX_VA_CLR0, GX_DIRECT);
     GX_SetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-    GX_SetNumTexGens(1);
-    GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
-    GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
-    GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
-    GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
-    GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GX_InvVtxCache();
-    GX_LoadTexObj(&to_b, GX_TEXMAP0);
-    GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
-    /* strips down the screen; alpha follows the blur strength for that height */
-    const int MY = 16;
+}
+
+static void set_tev(int t)
+{
+    if (t == cur_tev) return;
+    cur_tev = t;
+    GX_SetNumTevStages(1);
+    switch (t) {
+    case TEV_PLAIN:
+        vtx_plain();
+        break;
+    case TEV_GROUND:
+        /* vertex colour x detail x 2 (128 in the texture = unchanged) */
+        vtx_plain();
+        GX_SetNumTexGens(1);
+        GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_POS, GX_TEXMTX1);
+        GX_LoadTexObj(&to_detail, GX_TEXMAP0);
+        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+        GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_RASC, GX_CC_TEXC, GX_CC_ZERO);
+        GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+        GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_2, GX_TRUE, GX_TEVPREV);
+        GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        break;
+    case TEV_TEXT:
+        /* the atlas is coverage: colour from the vertex, alpha = vertex alpha x coverage */
+        vtx_tex();
+        GX_SetNumTexGens(1);
+        GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+        GX_LoadTexObj(&to_font, GX_TEXMAP0);
+        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+        GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC);
+        GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_RASA, GX_CA_ZERO);
+        GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        break;
+    case TEV_TEXMOD:
+        /* texture x vertex colour (post-processing quads); the texture is loaded by the caller */
+        vtx_tex();
+        GX_SetNumTexGens(1);
+        GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+        GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_ZERO);
+        GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+        GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        break;
+    case TEV_THRESH:
+        /* bright pass: (texture - K0) x 2, then x vertex colour */
+        vtx_tex();
+        GX_SetNumTexGens(1);
+        GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+        GX_SetNumTevStages(2);
+        GX_SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+        GX_SetTevKColorSel(GX_TEVSTAGE0, GX_TEV_KCSEL_K0);
+        GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_KONST, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+        GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_2, GX_TRUE, GX_TEVPREV);
+        GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+        GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GX_SetTevOrder(GX_TEVSTAGE1, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+        GX_SetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_CPREV, GX_CC_RASC, GX_CC_ZERO);
+        GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GX_SetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+        GX_SetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        break;
+    }
+}
+
+static void load_3d(void);
+static void load_2d(void);
+
+/* ---- frame copies ---- */
+static u32 efb_top(void) { if (wide) return 0; u32 h = rmode->efbHeight, bh = (h * 3 / 4) & ~3u; return ((h - bh) / 2) & ~1u; }
+static u32 efb_h(void) { u32 h = rmode->efbHeight; return wide ? h : ((h * 3 / 4) & ~3u); }
+
+static void copy_frame(void *dst, GXTexObj *to, int shrink, u8 fmt, int quadrant)
+{
+    u32 w = rmode->fbWidth, h = efb_h(), top = efb_top();
+    if (quadrant) { w /= 2; h /= 2; }
+    GX_SetTexCopySrc(0, (u16)top, (u16)w, (u16)h);
+    u32 dw = shrink ? w / 2 : w, dh = shrink ? h / 2 : h;
+    GX_SetTexCopyDst((u16)dw, (u16)dh, fmt, shrink ? GX_TRUE : GX_FALSE);
+    GX_CopyTex(dst, GX_FALSE);
+    GX_PixModeSync();
+    GX_InvalidateTexAll();
+    GX_InitTexObj(to, dst, (u16)dw, (u16)dh, fmt, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GX_InitTexObjLOD(to, GX_LINEAR, GX_LINEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
+}
+
+/* a textured quad in virtual screen coordinates */
+static void tq(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, u32 c)
+{
+    GX_Begin(GX_QUADS, GX_VTXFMT1, 4);
+    GX_Position3f32(x0, y0, 0); GX_Color1u32(c); GX_TexCoord2f32(u0, v0);
+    GX_Position3f32(x1, y0, 0); GX_Color1u32(c); GX_TexCoord2f32(u1, v0);
+    GX_Position3f32(x1, y1, 0); GX_Color1u32(c); GX_TexCoord2f32(u1, v1);
+    GX_Position3f32(x0, y1, 0); GX_Color1u32(c); GX_TexCoord2f32(u0, v1);
+    GX_End();
+}
+
+static void post_begin(void)
+{
+    if (cur_2d != 1) load_2d();
+    GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
+    cur_mode = -1;
+}
+
+static void blend_alpha(void) { GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR); }
+static void blend_add(void)   { GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, GX_LO_CLEAR); }
+static void blend_none(void)  { GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR); }
+
+/* the frame, shrunk to a quarter (tex_q) through the top-left quadrant of the EFB; the quadrant is put back
+ * from tex_full, which must hold the current frame */
+static void make_quarter(int bright, void *dst, GXTexObj *to)
+{
+    float hw = VW * 0.5f, hh = VH * 0.5f;
+    if (bright) {
+        GXColor k = { 0xD0, 0xD0, 0xD0, 0xFF };          /* threshold ~0.82 */
+        GX_SetTevKColor(GX_KCOLOR0, k);
+        set_tev(TEV_THRESH);
+    } else set_tev(TEV_TEXMOD);
+    GX_LoadTexObj(&to_half, GX_TEXMAP0);
+    blend_none();
+    tq(0, 0, hw, hh, 0, 0, 1, 1, 0xFFFFFFFFu);
+    copy_frame(dst, to, 1, GX_TF_RGB565, 1);
+    /* put the quadrant back */
+    set_tev(TEV_TEXMOD);
+    GX_LoadTexObj(&to_full, GX_TEXMAP0);
+    tq(0, 0, hw, hh, 0, 0, 0.5f, 0.5f, 0xFFFFFFFFu);
+}
+
+/* bloom and the vignette: once a frame, before the tilt-shift and the HUD */
+static void post_bloom(void)
+{
+    post_bloomed = 1;
+    post_begin();
+    copy_frame(tex_full, &to_full, 0, GX_TF_RGBA8, 0);
+    copy_frame(tex_half, &to_half, 1, GX_TF_RGB565, 0);
+    make_quarter(1, tex_bq, &to_bq);
+    /* the bright parts, blurred (five taps of the quarter-size copy) and added back */
+    set_tev(TEV_TEXMOD);
+    GX_LoadTexObj(&to_bq, GX_TEXMAP0);
+    blend_add();
+    const float o = 1.6f / 160.0f, p = 1.6f / 120.0f;
+    const float du[5] = { 0, -o, o, -o, o }, dv[5] = { 0, -p, -p, p, p };
+    for (int i = 0; i < 5; i++) tq(0, 0, VW, VH, du[i], dv[i], 1 + du[i], 1 + dv[i], 0xFFFFFF33u);
+    /* vignette: multiply by a soft falloff */
+    set_tev(TEV_PLAIN);
+    GX_SetBlendMode(GX_BM_BLEND, GX_BL_DSTCLR, GX_BL_ZERO, GX_LO_CLEAR);
+    const int MX = 12, MY = 8;
+    for (int j = 0; j < MY; j++) {
+        GX_Begin(GX_TRIANGLESTRIP, GX_VTXFMT0, (u16)((MX + 1) * 2));
+        for (int i = 0; i <= MX; i++)
+            for (int r = 0; r < 2; r++) {
+                float x = VW * (float)i / MX, y = VH * (float)(j + r) / MY;
+                float dx = (x / VW - 0.5f) * 2, dy = (y / VH - 0.5f) * 2;
+                float v = 1.0f - 0.22f * (dx * dx * 0.7f + dy * dy);
+                u8 c = (u8)(v * 255.0f);
+                GX_Position3f32(x, y, 0); GX_Color4u8(c, c, c, 255);
+            }
+        GX_End();
+    }
+}
+
+/* the miniature look: sharp around the craft, two levels of blur growing towards the top and bottom */
+static void post_tiltshift(void)
+{
+    if (!post_bloomed) post_bloom();
+    post_begin();
+    copy_frame(tex_full, &to_full, 0, GX_TF_RGBA8, 0);
+    copy_frame(tex_half, &to_half, 1, GX_TF_RGB565, 0);
+    make_quarter(0, tex_q, &to_q);
+    have_q = 1;
+    set_tev(TEV_TEXMOD);
+    blend_alpha();
+    const int MY = 24;
     for (int pass = 0; pass < 2; pass++) {
-        float o = pass ? -1.5f : 1.5f, ou = o / VW, ov = o / VH, ka = pass ? 0.55f : 0.8f;
+        GX_LoadTexObj(pass ? &to_q : &to_half, GX_TEXMAP0);
         GX_Begin(GX_TRIANGLESTRIP, GX_VTXFMT1, (u16)((MY + 1) * 2));
         for (int j = 0; j <= MY; j++) {
-            float t = (float)j / (float)MY, y = VH * t;
-            float k = 0;
-            if (t < 0.32f) k = r_post_top * (1.0f - t / 0.32f);
-            if (t > 0.78f) k = r_post_bot * ((t - 0.78f) / 0.22f);
+            float t = (float)j / (float)MY, y = VH * t, k = 0;
+            if (t < 0.5f) k = r_post_top * (0.5f - t) / 0.5f;
+            if (t > 0.84f) k = r_post_bot * (t - 0.84f) / 0.16f;
             k = k > 1 ? 1 : k;
-            u8 a = (u8)(k * ka * 255.0f);
-            GX_Position3f32(0, y, 0); GX_Color4u8(255, 255, 255, a); GX_TexCoord2f32(0 + ou, t + ov);
-            GX_Position3f32(VW, y, 0); GX_Color4u8(255, 255, 255, a); GX_TexCoord2f32(1 + ou, t + ov);
+            k = k * k * (3 - 2 * k);
+            float a = pass ? (k - 0.5f) * 2.0f : k * 2.0f;
+            a = a < 0 ? 0 : (a > 1 ? 1 : a);
+            u8 al = (u8)(a * 255.0f);
+            GX_Position3f32(0, y, 0); GX_Color4u8(255, 255, 255, al); GX_TexCoord2f32(0, t);
+            GX_Position3f32(VW, y, 0); GX_Color4u8(255, 255, 255, al); GX_TexCoord2f32(1, t);
         }
         GX_End();
     }
-    vtx_plain();
-    cur_mode = -1;
+}
+
+/* the film: soft focus, halation, the RGB split, lifted blacks and grain (before the HUD) */
+static void post_grunge(void)
+{
+    if (!post_bloomed) post_bloom();
+    post_grunged = 1;
+    post_begin();
+    copy_frame(tex_full, &to_full, 0, GX_TF_RGBA8, 0);
+    copy_frame(tex_half, &to_half, 1, GX_TF_RGB565, 0);
+    if (!have_q) { make_quarter(0, tex_q, &to_q); have_q = 1; }
+    /* soft focus: the half-size copy over the frame */
+    set_tev(TEV_TEXMOD);
+    GX_LoadTexObj(&to_half, GX_TEXMAP0);
+    blend_alpha();
+    tq(0, 0, VW, VH, 0, 0, 1, 1, 0xFFFFFF8Cu);
+    /* halation: the bright neon bleeds a warm glow (the quarter-size copy, thresholded, tinted) */
+    {
+        GXColor k = { 0x8C, 0x8C, 0x8C, 0xFF };          /* threshold ~0.55 */
+        GX_SetTevKColor(GX_KCOLOR0, k);
+        set_tev(TEV_THRESH);
+        GX_LoadTexObj(&to_q, GX_TEXMAP0);
+        blend_add();
+        const float o = 2.5f / 160.0f, p = 2.5f / 120.0f;
+        tq(0, 0, VW, VH, -o, -p, 1 - o, 1 - p, 0xA06A8480u);
+        tq(0, 0, VW, VH, o, p, 1 + o, 1 + p, 0xA06A8480u);
+    }
+    /* RGB split: rebuild the frame channel by channel, red pushed out, blue pulled in (more at the edges) */
+    copy_frame(tex_full, &to_full, 0, GX_TF_RGBA8, 0);
+    set_tev(TEV_PLAIN);
+    blend_none();
+    GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
+    GX_Position3f32(0, 0, 0); GX_Color1u32(0x000000FFu);
+    GX_Position3f32(VW, 0, 0); GX_Color1u32(0x000000FFu);
+    GX_Position3f32(VW, VH, 0); GX_Color1u32(0x000000FFu);
+    GX_Position3f32(0, VH, 0); GX_Color1u32(0x000000FFu);
+    GX_End();
+    set_tev(TEV_TEXMOD);
+    GX_LoadTexObj(&to_full, GX_TEXMAP0);
+    GX_SetBlendMode(GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, GX_LO_CLEAR);
+    const int MX = 16, MY = 10;
+    const u32 chan[3] = { 0xFF0000FFu, 0x00FF00FFu, 0x0000FFFFu };
+    const float dir[3] = { 1.0f, 0.0f, -1.0f };
+    for (int ch = 0; ch < 3; ch++)
+        for (int j = 0; j < MY; j++) {
+            GX_Begin(GX_TRIANGLESTRIP, GX_VTXFMT1, (u16)((MX + 1) * 2));
+            for (int i = 0; i <= MX; i++)
+                for (int r = 0; r < 2; r++) {
+                    float u = (float)i / MX, v = (float)(j + r) / MY;
+                    float dx = (u - 0.5f) * 2, dy = (v - 0.5f) * 2, r2 = dx * dx + dy * dy;
+                    float k = (1.2f + 4.5f * r2) * r_fx_split * dir[ch];
+                    /* sample from closer to the centre for red: the red image appears pushed outwards */
+                    float su = u - dx * k / VW, sv = v - dy * k * 0.5f / VH;
+                    GX_Position3f32(u * VW, v * VH, 0); GX_Color1u32(chan[ch]); GX_TexCoord2f32(su, sv);
+                }
+            GX_End();
+        }
+    /* lifted blacks: a faded, filmic floor */
+    set_tev(TEV_PLAIN);
+    blend_alpha();
+    GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
+    GX_Position3f32(0, 0, 0); GX_Color1u32(0xFFFFFF09u);
+    GX_Position3f32(VW, 0, 0); GX_Color1u32(0xFFFFFF09u);
+    GX_Position3f32(VW, VH, 0); GX_Color1u32(0xFFFFFF09u);
+    GX_Position3f32(0, VH, 0); GX_Color1u32(0xFFFFFF09u);
+    GX_End();
+    /* grain: dst x (1 + k (n - 0.5)), a new offset every frame */
+    set_tev(TEV_TEXMOD);
+    GX_LoadTexObj(&to_grain, GX_TEXMAP0);
+    GX_SetBlendMode(GX_BM_BLEND, GX_BL_DSTCLR, GX_BL_SRCALPHA, GX_LO_CLEAR);
+    u32 hsh = frame_no * 2654435761u;
+    float gu = (float)(hsh & 127) / 128.0f, gv = (float)((hsh >> 7) & 127) / 128.0f;
+    float nu = (640.0f / (float)R_GRAIN_SIZE), nv = ((float)efb_h() / (float)R_GRAIN_SIZE);
+    u8 kk = 56;                                         /* ~0.22 */
+    tq(0, 0, VW, VH, gu, gv, gu + nu, gv + nv, ((u32)kk << 24) | ((u32)kk << 16) | ((u32)kk << 8) | (u32)(255 - kk / 2));
 }
 
 /* ------------------------------------------------------------------ */
@@ -287,18 +554,19 @@ static void load_2d(void)
 
 static void set_mode(int mode, int is2d)
 {
+    set_tev(mode == RM_GROUND && !is2d ? TEV_GROUND : TEV_PLAIN);
     if (mode == cur_mode && is2d == cur_2d) return;
     if (is2d != cur_2d) { if (is2d) load_2d(); else load_3d(); }
     cur_mode = mode;
     switch (mode) {
-    case RM_OPAQUE: GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR); break;
+    case RM_OPAQUE: case RM_GROUND: GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR); break;
     case RM_ADD:    GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, GX_LO_CLEAR); break;
     case RM_MUL2:   GX_SetBlendMode(GX_BM_BLEND, GX_BL_DSTCLR, GX_BL_SRCCLR, GX_LO_CLEAR); break;
     default:        GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR); break;
     }
     if (is2d) GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     else switch (mode) {
-    case RM_OPAQUE: GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE); break;
+    case RM_OPAQUE: case RM_GROUND: GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE); break;
     case RM_SHADOW: GX_SetZMode(GX_TRUE, GX_LESS, GX_TRUE); break;
     default:        GX_SetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE); break;
     }
@@ -322,20 +590,53 @@ static void send_tris(const RV *v, int n)
     }
 }
 
+static void send_text(const TV *v, int n)
+{
+    if (cur_2d != 1) load_2d();
+    set_tev(TEV_TEXT);
+    GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
+    blend_alpha();
+    cur_mode = -1;
+    int i = 0;
+    while (i + 2 < n) {
+        int k = n - i;
+        if (k > 65520) k = 65520;
+        k -= k % 3;
+        GX_Begin(GX_TRIANGLES, GX_VTXFMT1, (u16)k);
+        for (int j = 0; j < k; j++) {
+            const TV *p = &v[i + j];
+            GX_Position3f32(p->x, p->y, 0);
+            GX_Color1u32(p->c);
+            GX_TexCoord2f32(p->u, p->v);
+        }
+        GX_End();
+        i += k;
+    }
+}
+
 static void draw_list(void)
 {
-    cur_2d = -1; cur_mode = -1;
+    cur_2d = -1; cur_mode = -1; cur_tev = -1;
+    post_bloomed = post_grunged = have_q = 0;
+    frame_no++;
+    int any3d = 0;
     for (int ci = 0; ci < r_ncmd; ci++) {
         const RCmd *c = &r_cmd[ci];
+        if (c->type == RC_MESH || c->type == RC_TRIS) any3d = 1;
+        /* the film look goes on before the first 2D layer (it applies to the 3D view only) */
+        if ((c->type == RC_2D || c->type == RC_TEXT) && any3d && !post_grunged) post_grunge();
         switch (c->type) {
         case RC_POST:
-            post_apply();
+            post_tiltshift();
             break;
         case RC_MESH:
             if (c->mesh >= nmesh) break;
             set_mode(c->mode, 0);
             if (meshes[c->mesh].dl) GX_CallDispList(meshes[c->mesh].dl, meshes[c->mesh].len);
             else if (meshes[c->mesh].imm) send_tris(meshes[c->mesh].imm, meshes[c->mesh].n);
+            break;
+        case RC_TEXT:
+            if (c->count >= 3) send_text(&r_tv[c->start], c->count);
             break;
         default:
             if (c->count < 3) break;
@@ -344,6 +645,8 @@ static void draw_list(void)
             break;
         }
     }
+    if (any3d && !post_grunged) post_grunge();
+    set_tev(TEV_PLAIN);
 }
 
 static int frame_pending;
@@ -602,7 +905,7 @@ int main(int argc, char **argv)
     SYS_SetPowerCallback(on_power);
     for (int i = 0; i < NUM_LOOPS; i++) loop_snd[i] = -1;
 
-    post_init();
+    textures_init();
     show_loading();
     audio_init();
     DCFlushRange((void *)audio_pool(), (u32)audio_pool_bytes());

@@ -9,9 +9,92 @@
 
 static const char *AI_NAMES[14] = { "MAX VOLTA", "LUNA REYES", "KAI STORM", "ZOE BLAZE", "RICO DIAZ", "NINA FROST",
     "JET HARLOW", "SKYE RIVERA", "BRUNO KOVAC", "MIA TANAKA", "DUKE MORGAN", "IVY CHEN", "OTTO VANCE", "RAE NOVAK" };
-static const float AI_TIER[NUM_TRACKS] = { 0.3f, 1.3f, 2.1f, 3.0f, 3.8f };
+static const float AI_TIER[NUM_TRACKS] = { 0.3f, 1.3f, 2.1f, 3.0f, 3.6f };
 
 static Rng rr;
+
+/* expanding light rings on the deck (boosts, the 88 mph shockwave) */
+typedef struct { float x, y, z, t, dur, r0, r1, thick; uint32_t col; } Wave;
+#define MAX_WAVES 12
+static Wave waves[MAX_WAVES];
+
+static void wave_add(float x, float y, float z, float dur, float r0, float r1, float thick, uint32_t col)
+{
+    int k = 0;
+    for (int i = 0; i < MAX_WAVES; i++) if (waves[i].t >= waves[i].dur) { k = i; break; }
+    Wave *w = &waves[k];
+    w->x = x; w->y = y; w->z = z; w->t = 0; w->dur = dur; w->r0 = r0; w->r1 = r1; w->thick = thick; w->col = col;
+}
+
+static void waves_update(float dt) { for (int i = 0; i < MAX_WAVES; i++) if (waves[i].t < waves[i].dur) waves[i].t += dt; }
+
+static void waves_draw(void)
+{
+#ifdef NO_WAVES
+    return;
+#endif
+    r3d_mode(RM_ADD);
+    for (int i = 0; i < MAX_WAVES; i++) {
+        const Wave *w = &waves[i];
+        if (w->t >= w->dur || w->dur <= 0) continue;
+        float k = w->t / w->dur, e = 1.0f - (1.0f - k) * (1.0f - k);
+        float r = w->r0 + (w->r1 - w->r0) * e, a = (1.0f - k) * (1.0f - k);
+        float th = w->thick * (1.0f + 0.5f * k);
+        const int N = 40;
+        uint32_t cin = col_a(w->col, 0.18f * a), cmid = col_a(w->col, a), cout = col_a(w->col, 0.0f);
+        /* a faint wash inside the ring, so it reads as a wave of light rather than a hole */
+        {
+            uint32_t cc = col_a(w->col, 0.0f);
+            float y = w->y + 0.14f;
+            for (int j = 0; j < N; j++) {
+                float a0 = (float)j / N * TAU, a1 = (float)(j + 1) / N * TAU;
+                r3d_tri3(w->x, y, w->z, cc, w->x + cosf(a0) * (r - th), y, w->z + sinf(a0) * (r - th), cin,
+                         w->x + cosf(a1) * (r - th), y, w->z + sinf(a1) * (r - th), cin);
+            }
+        }
+        for (int j = 0; j < N; j++) {
+            float a0 = (float)j / N * TAU, a1 = (float)(j + 1) / N * TAU;
+            float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+            float y = w->y + 0.15f;
+            /* a soft band: transparent - bright - transparent */
+            r3d_tri3(w->x + c0 * (r - th), y, w->z + s0 * (r - th), cin, w->x + c1 * (r - th), y, w->z + s1 * (r - th), cin, w->x + c1 * r, y, w->z + s1 * r, cmid);
+            r3d_tri3(w->x + c0 * (r - th), y, w->z + s0 * (r - th), cin, w->x + c1 * r, y, w->z + s1 * r, cmid, w->x + c0 * r, y, w->z + s0 * r, cmid);
+            r3d_tri3(w->x + c0 * r, y, w->z + s0 * r, cmid, w->x + c1 * r, y, w->z + s1 * r, cmid, w->x + c1 * (r + th), y, w->z + s1 * (r + th), cout);
+            r3d_tri3(w->x + c0 * r, y, w->z + s0 * r, cmid, w->x + c1 * (r + th), y, w->z + s1 * (r + th), cout, w->x + c0 * (r + th), y, w->z + s0 * (r + th), cout);
+        }
+    }
+}
+
+/* the player's big moments */
+static void boost_burst(Car *c)
+{
+    float fx = sinf(c->h), fz = cosf(c->h);
+    int sig = c->livery == LIVERY_SIGNATURE;
+    wave_add(c->x, c->y, c->z, 0.7f, 2.0f, 15.0f, 0.7f, sig ? 0x3AA8FFFFu : 0x6AD8FFFFu);
+    wave_add(c->x, c->y, c->z, 0.45f, 1.0f, 8.0f, 0.45f, 0xE8F8FFFFu);
+    for (int k = 0; k < 26; k++) {
+        float a = rng_r(&rr, -0.6f, 0.6f), sp = rng_r(&rr, 8, 22);
+        fx_spawn(PT_SPARK, c->x - fx * 2.6f, c->y + 0.9f, c->z - fz * 2.6f,
+                 c->vx * 0.5f - (fx * cosf(a) - fz * sinf(a)) * sp, rng_r(&rr, 1, 5), c->vz * 0.5f - (fz * cosf(a) + fx * sinf(a)) * sp,
+                 rng_r(&rr, 0.25f, 0.55f), 0.07f, k & 1 ? 0xBFF4FFFFu : 0x3AA8FFFFu);
+    }
+    for (int k = 0; k < 6; k++)
+        fx_spawn(PT_FLAME, c->x - fx * (2.8f + (float)k * 0.6f), c->y + 1.0f, c->z - fz * (2.8f + (float)k * 0.6f), c->vx * 0.8f, 0, c->vz * 0.8f, 0.35f, 1.6f - (float)k * 0.15f, 0x9AE8FFFFu);
+}
+
+static void mph88_burst(Car *c)
+{
+    float fx = sinf(c->h), fz = cosf(c->h);
+    wave_add(c->x, c->y, c->z, 1.1f, 3.0f, 34.0f, 1.0f, 0x5AC8FFFFu);
+    wave_add(c->x, c->y, c->z, 0.8f, 2.0f, 20.0f, 0.6f, 0xFFFFFFFFu);
+    wave_add(c->x, c->y, c->z, 1.4f, 4.0f, 46.0f, 1.4f, 0x2A5AFFFFu);
+    /* streaks of light peeling off the craft and shooting back down the track */
+    for (int k = 0; k < 40; k++) {
+        float side = rng_r(&rr, -1.6f, 1.6f), sp = rng_r(&rr, 25, 45);
+        fx_spawn(PT_SPARK, c->x + fz * side, c->y + rng_r(&rr, 0.4f, 1.6f), c->z - fx * side,
+                 c->vx * 0.3f - fx * sp, rng_r(&rr, -0.5f, 0.5f), c->vz * 0.3f - fz * sp, rng_r(&rr, 0.3f, 0.6f), 0.09f, k % 3 ? 0x9AE8FFFFu : 0xFFFFFFFFu);
+    }
+}
 
 static void setup_ai(Car *c, int i, int track, int attract)
 {
@@ -30,8 +113,7 @@ static void setup_ai(Car *c, int i, int track, int attract)
     c->ai = 1;
     c->lane = rng_r(&rr, -1.2f, 1.2f);
     c->ai_nitro_t = rng_r(&rr, 2.0f, 8.0f);
-    c->body = (int)(rng_u(&rr) % NUM_BODIES);
-    if (track == TH_CANYON || track == TH_LANTERN) { if (rng_f(&rr) < 0.4f) c->body = 2; }
+    c->body = (int)(rng_u(&rr) % (NUM_BODIES - 1));          /* never the hidden craft */
     int p;
     do { p = (int)(rng_u(&rr) % NUM_PAINTS); } while (!attract && p == sv.paint);
     c->paint = PAINT[p];
@@ -46,6 +128,8 @@ void race_setup(int track, int laps, int attract)
     g.phase = attract ? RP_RACE : RP_INTRO;
     g.phase_t = 0; g.race_t = 0; g.paused = 0; g.final_lap_shown = 0; g.count_last = 4;
     g.shake = 0; g.wrong_t = 0;
+    g.boost_anim = 0; g.mph88_t = 0; g.armed88 = 1; g.since88 = 10.0f;
+    for (int i = 0; i < MAX_WAVES; i++) waves[i].t = waves[i].dur = 0;
     for (int i = 0; i < MAX_POPUPS; i++) g.pop[i].t = 0;
     rr.s = 0x9E3779B9u ^ (uint32_t)(track * 7919 + sv.races * 31 + 1);
     fx_reset();
@@ -69,7 +153,7 @@ void race_setup(int track, int laps, int attract)
         c->best_lap = 0;
         if (slot == player_slot) {
             c->is_player = 1;
-            c->body = sv.body; c->paint = PAINT[sv.paint]; c->paint2 = PAINT[sv.paint2]; c->livery = sv.livery;
+            c->body = sv.body; c->paint = PAINT[sv.paint]; c->paint2 = PAINT[sv.paint2]; c->livery = sv.body == BODY_FUTURE88 ? LIVERY_SIGNATURE : sv.livery;
             car_stats_from_levels(sv.lv, &c->st);
             strcpy(c->name, "YOU");
         } else {
@@ -114,14 +198,14 @@ static void player_input(Car *c, const Input *in, float dt)
     if (digital) steer_smooth += (target - steer_smooth) * damp(fabsf(target) > fabsf(steer_smooth) ? 9.0f : 18.0f, dt);
     else steer_smooth += (target - steer_smooth) * damp(30.0f, dt);
     c->in.steer = steer_smooth;
-    float thr = (in->held & (BTN_R | BTN_ZR)) ? 1.0f : 0.0f;
-    if (in->rt > thr) thr = in->rt;
+    /* A accelerates; L / ZL brakes and drifts; R / ZR fires the boost */
+    float thr = (in->held & BTN_A) ? 1.0f : 0.0f;
     float brk = (in->held & (BTN_L | BTN_ZL)) ? 1.0f : 0.0f;
     if (in->lt > brk) brk = in->lt;
     c->in.throttle = thr;
     c->in.brake = brk;
     c->in.drift = brk > 0.5f;
-    c->in.nitro = (in->pressed & BTN_A) != 0;
+    c->in.nitro = (in->pressed & (BTN_R | BTN_ZR)) != 0;
     c->in.hop = (in->pressed & BTN_B) != 0;
     if (in->pressed & BTN_Y) { c->ev_horn = 1; }
 }
@@ -148,11 +232,11 @@ static void car_effects(Car *c, int idx, float dt)
     for (int w = 0; w < 2; w++) {
         float s = w ? 1.0f : -1.0f;
         float px = c->x - fx * wz + rx * ws * s, pz = c->z - fz * wz + rz * ws * s;
-        if (sliding > 0.1f) skid_add(idx * 2 + w, px, c->y, pz, rx, rz, 0.24f, sliding * (surf == SURF_ASPHALT ? 1.0f : 0.8f));
-        else skid_break(idx * 2 + w);
+        (void)skid_add;
+        skid_break(idx * 2 + w);
         if (!near) continue;
         float spd = c->speed;
-        if (sliding > 0.1f && rng_f(&rr) < (trk.info->night ? 0.3f : 0.55f) * sliding) {
+        if (0) {
             uint32_t sc = surf == SURF_ASPHALT ? 0xE6E8ECFFu : (surf == SURF_DIRT ? 0xC89A6AFFu : 0xF4F8FFFFu);
             if (trk.info->theme == TH_LANTERN) sc = 0x8A6A50FFu;
             if (trk.info->night && surf == SURF_ASPHALT) sc = 0x6A7084FFu;
@@ -167,7 +251,7 @@ static void car_effects(Car *c, int idx, float dt)
                      -fx * spd * 0.2f + rx * s * rng_r(&rr, 1, 4) + rng_r(&rr, -2, 2), rng_r(&rr, 2, 5), -fz * spd * 0.2f + rz * s * rng_r(&rr, 1, 4) + rng_r(&rr, -2, 2),
                      rng_r(&rr, 0.18f, 0.35f), 0.05f, tc);
         }
-        if ((c->offroad || (surf != SURF_ASPHALT && spd > 16.0f)) && spd > 6.0f && rng_f(&rr) < (c->offroad ? 0.35f : 0.12f)) {
+        if (0) {
             uint32_t dc = surf == SURF_SNOW ? 0xF4F8FFFFu : (trk.info->theme == TH_FOREST ? 0x9A8A60FFu : (trk.info->theme == TH_HARBOR ? 0x8A8E96FFu : 0xC8956AFFu));
             if (trk.info->night) dc = col_scale(dc, 0.6f);
             fx_spawn(surf == SURF_SNOW ? PT_SNOW : PT_DUST, px, c->y + 0.3f, pz, c->vx * 0.2f + rng_r(&rr, -1, 1), rng_r(&rr, 0.5f, 1.5f), c->vz * 0.2f + rng_r(&rr, -1, 1),
@@ -175,6 +259,9 @@ static void car_effects(Car *c, int idx, float dt)
         }
     }
     if (!near) return;
+    if (c->speed > 8.0f && rng_f(&rr) < 0.6f)
+        fx_spawn(PT_FLAME, c->x - fx * 2.8f + rng_r(&rr, -0.3f, 0.3f), c->y + 1.1f, c->z - fz * 2.8f + rng_r(&rr, -0.3f, 0.3f),
+                 c->vx * 0.6f, 0.0f, c->vz * 0.6f, 0.35f, 0.45f, c->drifting ? 0xC860FFFFu : 0x3AB8FFFFu);
     if (c->boost_t > 0 && rng_f(&rr) < 0.8f) {
         for (int s = -1; s <= 1; s += 2)
             fx_spawn(PT_FLAME, c->x - fx * 2.8f + rx * 0.45f * (float)s, c->y + 0.55f, c->z - fz * 2.8f + rz * 0.45f * (float)s,
@@ -220,7 +307,8 @@ static void car_sounds(Car *c)
     float v = vol_of(c), p = pan_of(c);
     if (v > 0.01f) {
         if (c->ev_impact) snd(c->ev_impact_v > 9.0f ? SND_IMPACT_L : SND_IMPACT_S, v * clampf(c->ev_impact_v / 12.0f, 0.35f, 1.0f), rng_r(&rr, 0.9f, 1.1f), p);
-        if (c->ev_nitro) snd(SND_NITRO_START, v, 1.0f, p);
+        if (c->ev_nitro) { snd(SND_NITRO_START, v, 1.0f, p); boost_burst(c); }
+        if (c->ev_pad && !c->is_player) snd(SND_PAD, v * 0.6f, 1.0f, p);
         if (c->ev_boost) snd(SND_BOOST, v * (0.6f + 0.15f * (float)c->ev_boost), 0.9f + 0.1f * (float)c->ev_boost, p);
         if (c->ev_tier && c->is_player) snd(SND_TIER, 0.7f, 0.8f + 0.25f * (float)c->ev_tier, p);
         if (c->ev_shift && c->is_player) snd(SND_SHIFT, 0.35f, 1.0f, p);
@@ -229,12 +317,14 @@ static void car_sounds(Car *c)
         if (c->ev_horn) snd(SND_HORN, v, c->body == 1 ? 0.8f : (c->body == 2 ? 1.15f : 1.0f), p);
     }
     if (c->is_player) {
-        if (c->ev_nitro) { g.nitro_flash = 1.0f; g.shake = fmaxf(g.shake, 0.4f); }
+        if (c->ev_nitro) { g.nitro_flash = 1.0f; g.boost_anim = 1.0f; g.shake = fmaxf(g.shake, 0.45f); }
+        if (c->ev_pad) { snd(SND_PAD, 0.8f, 1.0f, 0); g.shake = fmaxf(g.shake, 0.2f); }
+        if (c->ev_ready) snd(SND_READY, 0.6f, 1.0f, 0);
         if (c->ev_tier) { g.tier_flash = 1.0f; g.tier_col = c->ev_tier; }
         if (c->ev_impact) g.shake = fmaxf(g.shake, clampf(c->ev_impact_v / 14.0f, 0.2f, 1.0f));
         if (c->ev_boost) { g.shake = fmaxf(g.shake, 0.25f); }
     }
-    c->ev_impact = c->ev_nitro = c->ev_boost = c->ev_land = c->ev_tier = c->ev_shift = c->ev_backfire = c->ev_horn = 0;
+    c->ev_impact = c->ev_nitro = c->ev_boost = c->ev_land = c->ev_tier = c->ev_shift = c->ev_backfire = c->ev_horn = c->ev_pad = c->ev_ready = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -311,15 +401,15 @@ void race_update(const Input *in, float dt)
     switch (g.phase) {
     case RP_INTRO:
         g.intro_a += dt;
-        if (g.phase_t > 3.2f || (in->pressed & (BTN_A | BTN_PLUS))) { g.phase = RP_COUNT; g.phase_t = 0; g.count_last = 4; }
+        if (g.phase_t > 3.2f || (in->pressed & (BTN_A | BTN_PLUS))) { g.phase = RP_COUNT; g.phase_t = 0; g.count_last = 4; g.thr_press_t = -1.0f; }
         break;
     case RP_COUNT: {
         int n = 3 - (int)floorf(g.phase_t / 0.85f);
         if (n < g.count_last && n >= 1) { snd(SND_BEEP, 0.8f, 1.0f, 0); g.count_last = n; }
-        /* a throttle tap right on "GO" gives a rocket start; holding it from the start bogs down */
+        /* press A as the last light comes on for a rocket start */
         if (pl) {
-            float thr = (in->held & (BTN_R | BTN_ZR)) ? 1.0f : in->rt;
-            if (thr > 0.5f && g.phase_t < 2.0f) pl->start_boost = -1.0f;
+            float thr = (in->held & BTN_A) ? 1.0f : 0.0f;
+            if (in->pressed & BTN_A) g.thr_press_t = g.phase_t;
             pl->rpm += ((thr > 0.5f ? 0.85f : 0.18f) - pl->rpm) * damp(6.0f, dt);
             pl->in.throttle = thr;
         }
@@ -329,9 +419,8 @@ void race_update(const Input *in, float dt)
             hud_popup("GO!", 0x5AF27AFFu, 64);
             for (int i = 0; i < ncars; i++) { cars[i].lap_start = 0; if (cars[i].ai) cars[i].start_boost = rng_r(&rr, 0.0f, 0.5f); }
             if (pl) {
-                float thr = (in->held & (BTN_R | BTN_ZR)) ? 1.0f : in->rt;
-                if (pl->start_boost < 0) pl->start_boost = 0;
-                else if (thr > 0.5f) { pl->start_boost = 1.0f; hud_popup("ROCKET START!", 0xFFD23AFFu, 26); snd(SND_BOOST, 0.8f, 1.1f, 0); }
+                int held = (in->held & BTN_A) != 0;
+                if (held && g.thr_press_t >= 1.6f) { pl->start_boost = 1.0f; hud_popup("ROCKET START!", 0xFFD23AFFu, 26); snd(SND_BOOST, 0.8f, 1.1f, 0); }
                 else pl->start_boost = 0;
             }
         }
@@ -427,6 +516,22 @@ void race_update(const Input *in, float dt)
     }
     if (g.attract && cars[0].lap > 2) race_setup(g.track, g.laps, 1);
     if (g.nitro_flash > 0) g.nitro_flash -= dt * 2.5f;
+    if (g.boost_anim > 0) g.boost_anim -= dt * 1.4f;
+    waves_update(dt);
+    /* 88 mph: every time the player gets up to it (it re-arms below 80) */
+    if (pl && g.phase == RP_RACE && !pl->finished) {
+        float mph = pl->speed * MPS_TO_MPH;
+        if (g.armed88 && mph >= 88.0f && g.since88 > 2.5f) {
+            g.armed88 = 0; g.since88 = 0; g.mph88_t = 0.0001f;
+            mph88_burst(pl);
+            for (int q = 0; q < MAX_POPUPS; q++) if (g.pop[q].t > 0.2f) g.pop[q].t = 0.2f;
+            snd(SND_SONIC, 1.0f, 1.0f, 0);
+            g.shake = fmaxf(g.shake, 0.55f);
+        }
+        if (mph < 80.0f) g.armed88 = 1;
+    }
+    g.since88 += dt;
+    if (g.mph88_t > 0) { g.mph88_t += dt; if (g.mph88_t > 1.6f) g.mph88_t = 0; }
     if (g.tier_flash > 0) g.tier_flash -= dt * 3.0f;
     race_camera(dt, 0);
 }
@@ -449,7 +554,7 @@ void race_camera(float dt, int snap)
     float spd = c->speed;
     int mode = g.attract ? CAM_FOLLOW : sv.cam;
     /* where to look: the car plus a little of where it's going */
-    float lead = mode == CAM_CLOSE ? 0.22f : 0.3f;
+    float lead = mode == CAM_CLOSE ? 0.22f : 0.28f;
     float tx = c->x + vx * lead, tz = c->z + vz * lead;
     float k = snap ? 1.0f : damp(6.0f, dt);
     g.look_x += (tx - g.look_x) * k;
@@ -466,10 +571,11 @@ void race_camera(float dt, int snap)
     switch (mode) {
     case CAM_CLOSE: dist = 15.0f + sp * 3.0f; height = 11.0f + sp * 2.5f; fov = 50.0f; break;
     case CAM_FIXED: dist = 18.0f + sp * 4.0f; height = 40.0f + sp * 6.0f; fov = 40.0f; break;
-    default:        dist = 22.0f + sp * 5.0f; height = 30.0f + sp * 6.0f; fov = 42.0f; break;
+    default:        dist = 31.0f + sp * 4.0f; height = 24.0f + sp * 3.0f; fov = 27.0f; break;
     }
-    if (c->boost_t > 0) fov += 6.0f;
+    if (c->boost_t > 0) fov += 6.0f + 6.0f * sat(g.boost_anim);
     else if (c->mini_t > 0) fov += 3.0f;
+    if (g.mph88_t > 0) fov += 7.0f * (1.0f - smooth01(g.mph88_t / 1.2f));
     float kk = snap ? 1.0f : damp(3.0f, dt);
     g.cdist += (dist - g.cdist) * kk;
     g.cheight += (height - g.cheight) * kk;
@@ -503,6 +609,7 @@ void race_draw_world(int hud)
     int night = trk.info->night;
     track_draw_world();
     sm_draw_mode(RM_OPAQUE, 0);
+    sm_draw_mode(RM_GROUND, 0);
     skid_draw();
     sm_draw_mode(RM_SHADOW, 0);
     for (int i = 0; i < ncars; i++) {
@@ -524,9 +631,10 @@ void race_draw_world(int hud)
     sm_draw_mode(RM_MUL2, 0);
     fx_draw_alpha();
     fx_draw_add();
+    waves_draw();
     track_draw_glows(g.t);
     if (sv.tilt) {
-        r_post_top = 0.75f; r_post_bot = 0.45f;
+        r_post_top = 1.0f; r_post_bot = 0.85f;
         r3d_post();
     }
     if (hud) hud_draw();
@@ -536,6 +644,12 @@ void race_render(void)
 {
     r3d_begin(trk.info->clear);
     r3d_camera(r_cam.ex, r_cam.ey, r_cam.ez, r_cam.tx, r_cam.ty, r_cam.tz, r_cam.fovy);
+    /* the RGB split swells with boosts and the 88 mph moment */
+    r_fx_split = 1.0f;
+    if (!g.attract && g.state == ST_RACE) {
+        r_fx_split += 2.0f * sat(g.boost_anim) + (g.mph88_t > 0 ? 3.0f * (1.0f - smooth01(g.mph88_t / 0.9f)) : 0.0f);
+        if (cars[0].boost_t > 0) r_fx_split += 0.6f;
+    }
     race_draw_world(!g.attract && g.state == ST_RACE);
 }
 
@@ -547,16 +661,15 @@ static int eng_snd(int body, int on)
     switch (body) {
     case 1: return on ? SND_ENG_B_ON : SND_ENG_B_OFF;
     case 2: return on ? SND_ENG_C_ON : SND_ENG_C_OFF;
+    case 3: return on ? SND_ENG_D_ON : SND_ENG_D_OFF;
     default: return on ? SND_ENG_A_ON : SND_ENG_A_OFF;
     }
 }
 
 static float eng_rate(const Car *c)
 {
-    /* the samples are synthesized at 3000 rpm; idle ~900, redline ~7800 */
-    float base = c->body == 1 ? 0.85f : (c->body == 3 ? 1.12f : 1.0f);
-    float rpm = 850.0f + c->rpm * 6900.0f;
-    return rpm / 3000.0f * base;
+    /* the turbine loops play at their natural pitch at about half spin */
+    return 0.62f + 0.75f * c->rpm;
 }
 
 void race_loops(LoopState *o)

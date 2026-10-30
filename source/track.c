@@ -11,6 +11,7 @@
 #include "ui.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 Track trk;
@@ -23,20 +24,22 @@ float  g_wallmax;
 static uint32_t *g_col;
 
 #define SAMPLE_STEP 2.0f
+#define HOVER_ELEV 10.0f
 #define MAX_SAMPLES 1400
 #define MARGIN 150.0f
+#define TERRAIN_REACH 105.0f
 
 const TrackInfo TRACK_INFO[NUM_TRACKS] = {
-    { "PINEWOOD LAKE", "ALPINE FOREST CIRCUIT", TH_FOREST, 0, SURF_ASPHALT, 1,
+    { "SKYLINE SPRINT", "ORBITAL GARDENS", TH_FOREST, 0, SURF_ASPHALT, 1,
       { -0.50f, 0.62f, 0.60f }, 0xFFE9C8FF, 0x9DB8E0FF, 0x5A6A3CFF, 0x3E6A3AFF, 1.00f },
-    { "RED ROCK CANYON", "DESERT DIRT RUN", TH_CANYON, 0, SURF_DIRT, 2,
-      { 0.62f, 0.52f, -0.58f }, 0xFFDDB0FF, 0xA9B9D8FF, 0x8A5A3AFF, 0xC27E50FF, 0.93f },
-    { "FROSTPEAK PASS", "SNOWBOUND MOUNTAIN", TH_SNOW, 0, SURF_SNOW, 3,
-      { 0.45f, 0.58f, 0.68f }, 0xFFF2E4FF, 0xA8C4EEFF, 0x9AA6BCFF, 0xC8D4E6FF, 0.86f },
-    { "NEON HARBOR", "CITY STREETS AT NIGHT", TH_HARBOR, 1, SURF_ASPHALT, 4,
-      { 0.35f, 0.80f, 0.48f }, 0x6A78B4FF, 0x283460FF, 0x161C2AFF, 0x0B0E18FF, 1.00f },
-    { "LANTERN VALLEY", "MIDNIGHT DIRT RALLY", TH_LANTERN, 1, SURF_DIRT, 5,
-      { -0.40f, 0.75f, 0.52f }, 0x5A6C9AFF, 0x1E2A44FF, 0x141A12FF, 0x0C1210FF, 0.94f },
+    { "MESA PRIME", "DUSK ON A RED PLANET", TH_CANYON, 0, SURF_DIRT, 2,
+      { 0.70f, 0.38f, -0.58f }, 0xFFB890FF, 0x8A7AC8FF, 0x6A3A4AFF, 0x5A3A5AFF, 0.93f },
+    { "CRYO STATION", "ICE PLANET RING", TH_SNOW, 0, SURF_SNOW, 3,
+      { 0.45f, 0.58f, 0.68f }, 0xFFF2E4FF, 0xA8C8FFFF, 0x9AA6BCFF, 0x9AC8F0FF, 0.86f },
+    { "NEON METRO", "MEGACITY AT NIGHT", TH_HARBOR, 1, SURF_ASPHALT, 4,
+      { 0.35f, 0.80f, 0.48f }, 0x5A5AA0FF, 0x2A2A60FF, 0x1A1430FF, 0x0A0818FF, 1.00f },
+    { "MAGMA RIFT", "VOLCANIC MOON", TH_LANTERN, 1, SURF_DIRT, 5,
+      { -0.40f, 0.75f, 0.52f }, 0x9A5A4AFF, 0x5A3040FF, 0x6A2A10FF, 0x1A0A08FF, 0.94f },
 };
 
 /* control points (x, z) in metres */
@@ -67,7 +70,7 @@ static const Basin BASINS[NUM_TRACKS][6] = {
     { { 330, -230, 60 }, { 120, -420, 110 }, { 0, 0, 0 } },
     { { 120, 360, 55 }, { -200, 300, 90 }, { 0, 0, 0 } },
     { { 120, -110, 80 }, { 60, -290, 170 }, { 420, -90, 120 }, { 230, -330, 120 }, { 0, 0, 0 } },
-    { { 330, 200, 30 }, { 50, 140, 45 }, { 0, 0, 0 } },
+    { { 330, 200, 60 }, { 50, 140, 70 }, { 230, -60, 80 }, { -150, 320, 90 }, { 470, 340, 90 }, { 0, 0, 0 } },
 };
 
 /* ------------------------------------------------------------------ */
@@ -198,19 +201,76 @@ void lit_box(float x, float y, float z, float hx, float hy, float hz, float yaw,
     }
 }
 
+/* smooth-shaded triangle: each vertex lit with its own normal (Gouraud) */
+void lit_tri_n(int mode, const float *p0, const float *n0, const float *p1, const float *n1, const float *p2, const float *n2, uint32_t alb)
+{
+    RV a, b, d;
+    rv(&a, p0[0], p0[1], p0[2], track_light(alb, n0[0], n0[1], n0[2], p0[0], p0[1], p0[2]));
+    rv(&b, p1[0], p1[1], p1[2], track_light(alb, n1[0], n1[1], n1[2], p1[0], p1[1], p1[2]));
+    rv(&d, p2[0], p2[1], p2[2], track_light(alb, n2[0], n2[1], n2[2], p2[0], p2[1], p2[2]));
+    sm_tri(mode, &a, &b, &d);
+}
+
 void lit_prism(float x, float y0, float z, float r0, float r1, float h, int n, float rot, uint32_t c, int cap)
 {
+    /* round things get more sides and smooth normals; 4-sided shapes stay sharp */
+    if (n <= 6) {                                   /* crystals, trunks, small boxes: faceted */
+        float y1 = y0 + h;
+        for (int i = 0; i < n; i++) {
+            float a0 = rot + (float)i / (float)n * TAU, a1 = rot + (float)(i + 1) / (float)n * TAU;
+            float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+            if (r1 < 0.01f) lit_tri(RM_OPAQUE, x + c1 * r0, y0, z + s1 * r0, x + c0 * r0, y0, z + s0 * r0, x, y1, z, c);
+            else lit_quad(RM_OPAQUE, x + c1 * r0, y0, z + s1 * r0, x + c0 * r0, y0, z + s0 * r0, x + c0 * r1, y1, z + s0 * r1, x + c1 * r1, y1, z + s1 * r1, c);
+        }
+        return;
+    }
+    n = n * 2 > 12 ? 12 : n * 2;
     float y1 = y0 + h;
+    float nl = sqrtf(h * h + (r0 - r1) * (r0 - r1));
+    float nh = h / nl, ny = (r0 - r1) / nl;
     for (int i = 0; i < n; i++) {
         float a0 = rot + (float)i / (float)n * TAU, a1 = rot + (float)(i + 1) / (float)n * TAU;
         float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
-        if (r1 < 0.01f)
-            lit_tri(RM_OPAQUE, x + c1 * r0, y0, z + s1 * r0, x + c0 * r0, y0, z + s0 * r0, x, y1, z, c);
-        else
-            lit_quad(RM_OPAQUE, x + c1 * r0, y0, z + s1 * r0, x + c0 * r0, y0, z + s0 * r0,
-                     x + c0 * r1, y1, z + s0 * r1, x + c1 * r1, y1, z + s1 * r1, c);
-        if (cap && r1 >= 0.01f) lit_tri(RM_OPAQUE, x, y1, z, x + c1 * r1, y1, z + s1 * r1, x + c0 * r1, y1, z + s0 * r1, c);
+        float n0[3] = { c0 * nh, ny, s0 * nh }, n1[3] = { c1 * nh, ny, s1 * nh };
+        float b0[3] = { x + c0 * r0, y0, z + s0 * r0 }, b1[3] = { x + c1 * r0, y0, z + s1 * r0 };
+        float t0[3] = { x + c0 * r1, y1, z + s0 * r1 }, t1[3] = { x + c1 * r1, y1, z + s1 * r1 };
+        if (r1 < 0.01f) {
+            float am = (a0 + a1) * 0.5f, na[3] = { cosf(am) * nh * 0.5f, 0.85f, sinf(am) * nh * 0.5f };
+            float ap[3] = { x, y1, z };
+            lit_tri_n(RM_OPAQUE, b1, n1, b0, n0, ap, na, c);
+        } else {
+            lit_tri_n(RM_OPAQUE, b1, n1, b0, n0, t0, n0, c);
+            lit_tri_n(RM_OPAQUE, b1, n1, t0, n0, t1, n1, c);
+            if (cap) {
+                float up[3] = { 0, 1, 0 }, ct[3] = { x, y1, z };
+                lit_tri_n(RM_OPAQUE, ct, up, t1, up, t0, up, c);
+            }
+        }
     }
+}
+
+/* a smooth ellipsoid (tree canopies, bushes, boulders); wob = how lumpy */
+void lit_blob(float x, float y, float z, float rx, float ry, float rz, uint32_t c, float wob, uint32_t seed)
+{
+    const int NA = 10, NB = 6;
+    float P[7][11][3], N[7][11][3];
+    for (int j = 0; j <= NB; j++) {
+        float b = -PI * 0.5f + PI * (float)j / (float)NB, cb = cosf(b), sb = sinf(b);
+        for (int i = 0; i <= NA; i++) {
+            float a = TAU * (float)(i % NA) / (float)NA, ca = cosf(a), sa = sinf(a);
+            float k = 1.0f + wob * (hash2f(i % NA, j, seed) - 0.5f) * (j > 0 && j < NB ? 1.0f : 0.0f);
+            P[j][i][0] = x + ca * cb * rx * k; P[j][i][1] = y + sb * ry * k; P[j][i][2] = z + sa * cb * rz * k;
+            float nx = ca * cb / rx, ny2 = sb / ry, nz = sa * cb / rz, l = sqrtf(nx * nx + ny2 * ny2 + nz * nz);
+            N[j][i][0] = nx / l; N[j][i][1] = ny2 / l; N[j][i][2] = nz / l;
+        }
+    }
+    for (int j = 0; j < NB; j++)
+        for (int i = 0; i < NA; i++) {
+            /* a little colour variation per patch reads as foliage / rock texture */
+            uint32_t cc = col_scale(c, 0.97f + 0.06f * hash2f(i, j, seed + 5));
+            lit_tri_n(RM_OPAQUE, P[j][i], N[j][i], P[j + 1][i], N[j + 1][i], P[j + 1][i + 1], N[j + 1][i + 1], cc);
+            lit_tri_n(RM_OPAQUE, P[j][i], N[j][i], P[j + 1][i + 1], N[j + 1][i + 1], P[j][i + 1], N[j][i + 1], cc);
+        }
 }
 
 /* shadows: project points along the sun onto the plane y = gy, take the convex hull, lay it on the ground */
@@ -245,18 +305,32 @@ void shadow_hull(const float *pts, int n, float gy)
     }
     k--;
     if (k < 3) return;
-    uint32_t sc = trk.info->theme == TH_SNOW ? 0x3A5A9A70u : 0x18204066u;
+    uint32_t sc = trk.info->theme == TH_SNOW ? 0x3A5A9A60u : 0x2A305A58u;
     float cx = 0, cz = 0;
     for (int i = 0; i < k; i++) { cx += h[i][0]; cz += h[i][1]; }
     cx /= (float)k; cz /= (float)k;
     float cy = track_height(cx, cz) + 0.12f;
+    /* a soft edge: the hull pulled in for the solid core, pushed out for a fading rim */
+    float in[130][2], out[130][2];
+    for (int i = 0; i < k; i++) {
+        float dx = h[i][0] - cx, dz = h[i][1] - cz, d = sqrtf(dx * dx + dz * dz) + 1e-4f;
+        float pull = fminf(1.2f, d * 0.4f);
+        in[i][0] = h[i][0] - dx / d * pull; in[i][1] = h[i][1] - dz / d * pull;
+        out[i][0] = h[i][0] + dx / d * 1.4f; out[i][1] = h[i][1] + dz / d * 1.4f;
+    }
     for (int i = 0; i < k; i++) {
         int j = (i + 1) % k;
-        RV a, b, c;
+        RV a, b, c, d;
         rv(&a, cx, cy, cz, sc);
-        rv(&b, h[i][0], track_height(h[i][0], h[i][1]) + 0.12f, h[i][1], sc);
-        rv(&c, h[j][0], track_height(h[j][0], h[j][1]) + 0.12f, h[j][1], sc);
+        rv(&b, in[i][0], track_height(in[i][0], in[i][1]) + 0.12f, in[i][1], sc);
+        rv(&c, in[j][0], track_height(in[j][0], in[j][1]) + 0.12f, in[j][1], sc);
         sm_tri(RM_SHADOW, &a, &b, &c);
+        uint32_t co = sc & 0xFFFFFF00u;
+        rv(&d, out[j][0], track_height(out[j][0], out[j][1]) + 0.11f, out[j][1], co);
+        RV e;
+        rv(&e, out[i][0], track_height(out[i][0], out[i][1]) + 0.11f, out[i][1], co);
+        sm_tri(RM_ALPHA, &b, &e, &d);
+        sm_tri(RM_ALPHA, &b, &d, &c);
     }
 }
 
@@ -359,7 +433,7 @@ static void build_centre(const TDef *D)
     /* heights: gentle rolling along the lap */
     for (int k = 0; k < n; k++) {
         float u = (float)k / (float)n * TAU;
-        samples[k].y = D->hamp * (0.6f * sinf(u + D->ph1) + 0.4f * sinf(2 * u + D->ph2) + 0.2f * sinf(3 * u + D->ph1 * 2.0f));
+        samples[k].y = HOVER_ELEV + D->hamp * 0.5f * (0.6f * sinf(u + D->ph1) + 0.4f * sinf(2 * u + D->ph2) + 0.2f * sinf(3 * u + D->ph1 * 2.0f));
     }
 }
 
@@ -475,7 +549,7 @@ static float natural(int theme, float x, float z, float d, float base)
         break;
     case TH_CANYON: {
         float n = fbm(x / 60.0f, z / 60.0f, 21);
-        float cliff = (9.0f + 9.0f * n) * smoothstep(19, 29, d + (n - 0.5f) * 10.0f);
+        float cliff = (6.0f + 8.0f * n) * smoothstep(34, 56, d + (n - 0.5f) * 10.0f);
         float mesa = 10.0f * smoothstep(60, 120, d) * fbm(x / 140.0f, z / 140.0f, 9);
         h = base + cliff + mesa;
         break;
@@ -573,10 +647,8 @@ static void build_grid(void)
             float d = g_dst[id];
             float side = (x - s->x) * s->nx + (z - s->z) * s->nz;
             float wall = side < 0 ? s->wl : s->wr;
-            float base = s->y;
-            float t = I->theme == TH_CANYON ? smoothstep(wall + 2.5f, wall + 9.0f, d) : smoothstep(wall + 3.5f, wall + 22.0f, d);
-            float nat = natural(I->theme, x, z, d, base);
-            g_hgt[id] = lerpf(base - 0.35f, nat, t);
+            float base = s->y - HOVER_ELEV;
+            g_hgt[id] = natural(I->theme, x, z, d + 6.0f, base);
         }
     /* a little smoothing far from the track (keeps the hills soft) */
     static float tmp[GMAX * GMAX];
@@ -707,11 +779,11 @@ typedef struct {
 } Pal;
 
 static const Pal PAL[NUM_TRACKS] = {
-    /* forest */  { 0x6FA548FF, 0x4E8A3AFF, 0x9C8458FF, 0x8C8C88FF, 0x6E7079FF, 0x656771FF, 0x4E5058FF, 0xF2F2EEFF, 0x6A9E46FF, 0xD9C38FFF, 0xE03A30FF, 0xF4F4F0FF, 0x3A8CB4FF, 0x6A8A6AFF },
+    /* forest */  { 0x7AB44EFF, 0x5A9A42FF, 0x9C8458FF, 0x8C8C88FF, 0x66697AFF, 0x5E6172FF, 0x4A4C58FF, 0xF2F2EEFF, 0x78B24CFF, 0xD9C38FFF, 0xE03A30FF, 0xF4F4F0FF, 0x3A8CB4FF, 0x6A8A6AFF },
     /* canyon */  { 0xD69A62FF, 0xC9844FFF, 0xE0B07CFF, 0xB8673FFF, 0xE2B07EFF, 0xD9A672FF, 0xBE8A5CFF, 0xF0D6B0FF, 0xD9A06CFF, 0xE7BE8EFF, 0xE04030FF, 0xF2EEE6FF, 0x3AB4B0FF, 0xB08060FF },
     /* snow */    { 0xF4F8FFFF, 0xE2EAF6FF, 0xB8C2D2FF, 0x8A94A6FF, 0x8E98AAFF, 0x9AA4B6FF, 0x6A7486FF, 0xFFFFFFFF, 0xEEF3FAFF, 0xDCE6F2FF, 0x2F6CE0FF, 0xF6F8FFFF, 0x7ABCE8FF, 0xC6D6EAFF },
     /* harbor */  { 0x5E636EFF, 0x555A64FF, 0x6A6A6AFF, 0x7A7E86FF, 0x50545EFF, 0x4A4E57FF, 0x3C4048FF, 0xF6F2E6FF, 0x6A6E78FF, 0x7A7F8AFF, 0xF0A020FF, 0x2A2C30FF, 0x1E4C78FF, 0x40464EFF },
-    /* lantern */ { 0x5E9A44FF, 0x4A8236FF, 0xA36A40FF, 0x7A7A70FF, 0xB27448FF, 0xA4683EFF, 0x8E5A36FF, 0xE8D8B0FF, 0x6A9C46FF, 0xB88458FF, 0xD84030FF, 0xF2EEE2FF, 0x2E6E8EFF, 0x506A44FF },
+    /* lantern */ { 0x3A3234FF, 0x2C2628FF, 0x4A3A34FF, 0x4A4244FF, 0xB27448FF, 0xA4683EFF, 0x8E5A36FF, 0xE8D8B0FF, 0x6A9C46FF, 0xB88458FF, 0xD84030FF, 0xF2EEE2FF, 0xFF6A1AFF, 0x6A2A10FF },
 };
 
 static uint32_t ground_albedo(float x, float z, float d, float h, float slope)
@@ -763,20 +835,37 @@ static void build_terrain(void)
             float x = g_x0 + (float)i * GRID, z = g_z0 + (float)j * GRID;
             uint32_t alb = ground_albedo(x, z, g_dst[id], g_hgt[id], 1.0f - ny);
             g_col[id] = track_light(alb, nx, ny, nz, x, g_hgt[id], z);
+            {
+                /* contact shading: props, and the foot of the barriers */
+                const TSample *ss = &samples[g_smp[id]];
+                float side = (x - ss->x) * ss->nx + (z - ss->z) * ss->nz;
+                float wall = side < 0 ? ss->wl : ss->wr;
+                float dw = fabsf(fabsf(side) - wall);
+                float ao = scenery_ao(x, z) * (1.0f - 0.3f * smoothstep(3.0f, 0.0f, dw));
+                g_col[id] = col_scale(g_col[id], ao);
+            }
+            if (trk.info->theme == TH_LANTERN) {
+                /* glowing lava veins through the rock */
+                float v1 = fabsf(vnoise(x / 34.0f, z / 34.0f, 61) - 0.5f), v2 = fabsf(vnoise(x / 13.0f, z / 13.0f, 62) - 0.5f);
+                float glow = smoothstep(0.045f, 0.0f, v1) + 0.6f * smoothstep(0.03f, 0.0f, v2) * smoothstep(0.12f, 0.0f, v1);
+                if (glow > 0) g_col[id] = col_mix(g_col[id], 0xFF6A1AFFu, sat(glow));
+            }
         }
     for (int j = 0; j < g_h - 1; j++)
         for (int i = 0; i < g_w - 1; i++) {
             int id = j * g_w + i;
             /* hidden completely under the road and its shoulders? skip */
             if (g_dst[id] < 4.0f && g_dst[id + 1] < 4.0f && g_dst[id + g_w] < 4.0f && g_dst[id + g_w + 1] < 4.0f) continue;
+            /* too far from the track for the camera ever to see it */
+            if (g_dst[id] > TERRAIN_REACH && g_dst[id + 1] > TERRAIN_REACH && g_dst[id + g_w] > TERRAIN_REACH && g_dst[id + g_w + 1] > TERRAIN_REACH) continue;
             float x = g_x0 + (float)i * GRID, z = g_z0 + (float)j * GRID;
             RV a, b, c, d;
             rv(&a, x, g_hgt[id], z, g_col[id]);
             rv(&b, x + GRID, g_hgt[id + 1], z, g_col[id + 1]);
             rv(&c, x, g_hgt[id + g_w], z + GRID, g_col[id + g_w]);
             rv(&d, x + GRID, g_hgt[id + g_w + 1], z + GRID, g_col[id + g_w + 1]);
-            sm_tri(RM_OPAQUE, &a, &b, &c);
-            sm_tri(RM_OPAQUE, &d, &c, &b);
+            sm_tri(RM_GROUND, &a, &b, &c);
+            sm_tri(RM_GROUND, &d, &c, &b);
         }
     /* water */
     if (trk.water > -999.0f) {
@@ -796,7 +885,8 @@ static void build_terrain(void)
                     float wv = vnoise(px / 9.0f, pz / 9.0f, 3);
                     uint32_t wc = col_mix(col_scale(P->water, 1.25f), col_scale(P->water, 0.7f), smoothstep(0.0f, 4.0f, depth));
                     wc = col_scale(wc, 0.9f + 0.2f * wv);
-                    uint32_t lc = track_light(wc, 0, 1, 0, px, trk.water, pz);
+                    uint32_t lc = trk.info->theme == TH_LANTERN ? col_scale(wc, 0.8f + 0.5f * vnoise(px / 6.0f, pz / 6.0f, 9)) : track_light(wc, 0, 1, 0, px, trk.water, pz);
+                    if (trk.info->theme == TH_LANTERN) depth = 9.0f;
                     rv(&v[k], px, trk.water, pz, col_seta(lc, (int)(150 + 90 * smoothstep(0.0f, 3.0f, depth))));
                 }
                 sm_tri(RM_ALPHA, &v[0], &v[1], &v[2]);
@@ -810,241 +900,164 @@ static void build_terrain(void)
 /* ------------------------------------------------------------------ */
 #define NCOL 15
 
-static void build_road(void)
+/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* the hover track: a floating deck with glowing edges, energy walls,  */
+/* boost pads, gates and pylons                                        */
+/* ------------------------------------------------------------------ */
+typedef struct { uint32_t deck, deck2, margin, accent, accent2, skirt; } HPal;
+static const HPal HP[NUM_TRACKS] = {
+    { 0x8A94A8FFu, 0x7E889CFFu, 0x5A6274FFu, 0x2AD8FFFFu, 0xFF4AA8FFu, 0x3A4252FFu },
+    { 0x5E5258FFu, 0x564A50FFu, 0x3E3438FFu, 0xFF8A2AFFu, 0x3AE8E0FFu, 0x2E262AFFu },
+    { 0x5A6A88FFu, 0x52627EFFu, 0x3E4A62FFu, 0x3AD0FFFFu, 0xFFFFFFFFu, 0x3A4660FFu },
+    { 0x2A2E40FFu, 0x262A3AFFu, 0x1A1C28FFu, 0x2AE8FFFFu, 0xFF3AC8FFu, 0x14161EFFu },
+    { 0x46404AFFu, 0x403A44FFu, 0x2E282EFFu, 0xFF6A1AFFu, 0xFFD23AFFu, 0x241E22FFu },
+};
+static int boost_at[4], nboost;
+
+static int is_boost(int k)
 {
-    const Pal *P = &PAL[trk.id];
+    for (int i = 0; i < nboost; i++) { int d = k - boost_at[i]; if (d >= 0 && d < 10) return 1; }
+    return 0;
+}
+
+int track_is_boost(int k) { return is_boost(k); }
+float track_pad_lat(int k) { return samples[k].line * 0.6f; }
+
+static void build_hover_track(void)
+{
+    const HPal *P = &HP[trk.id];
     int n = trk.n;
-    int asphalt = trk.info->surface == SURF_ASPHALT;
-    static RV prev[NCOL], cur[NCOL];
-    static uint32_t prevbase[NCOL], curbase[NCOL];
-    for (int kk = 0; kk <= n; kk++) {
-        int k = kk % n;
-        const TSample *s = &samples[k];
-        float hw = s->hw, kl = (s->kerb & 1) ? 1.1f : 0.0f, kr = (s->kerb & 2) ? 1.1f : 0.0f;
-        /* lateral offsets of the cross-section columns */
-        float off[NCOL] = {
-            -s->wl - 3.0f, -s->wl, -hw - kl - 0.01f, -hw - 0.0f, -hw + 0.25f, -hw + 0.55f, -hw * 0.5f, 0.0f,
-            hw * 0.5f, hw - 0.55f, hw - 0.25f, hw, hw + kr + 0.01f, s->wr, s->wr + 3.0f
-        };
-        int block = (k / 2) & 1;
-        for (int c = 0; c < NCOL; c++) {
-            float x = s->x + s->nx * off[c], z = s->z + s->nz * off[c];
-            float y = s->y;
-            uint32_t alb;
-            float lineo = off[c] - s->line;
-            float rub = smoothstep(4.0f, 0.5f, fabsf(lineo));
-            float nn = vnoise(x / 3.0f, z / 3.0f, 17);
-            uint32_t road = col_mix(P->road1, P->road2, nn);
-            road = col_mix(road, P->rubber, rub * (asphalt ? 0.55f : 0.45f));
-            if (c == 0 || c == NCOL - 1) {
-                alb = ground_albedo(x, z, fabsf(off[c]), y, 0.0f);
-                y = y - 0.12f;
-            } else if (c == 1 || c == NCOL - 2) {
-                float sl = c == 1 ? s->wl - hw : s->wr - hw;
-                alb = col_mix(P->shoulder, P->runoff, smoothstep(5.0f, 8.0f, sl));
-                y -= 0.03f;
-            } else if (c == 2 || c == 3) {
-                int on = (s->kerb & 1) != 0;
-                if (on) { alb = block ? P->kerb1 : P->kerb2; y += 0.07f; }
-                else { alb = c == 2 ? col_mix(P->shoulder, P->runoff, 0.5f) : road; if (c == 2) y -= 0.02f; }
-                if (on && c == 3) y += 0.0f;
-            } else if (c == NCOL - 3 || c == NCOL - 4) {
-                int on = (s->kerb & 2) != 0;
-                if (on) { alb = block ? P->kerb1 : P->kerb2; y += 0.07f; }
-                else { alb = c == NCOL - 3 ? col_mix(P->shoulder, P->runoff, 0.5f) : road; if (c == NCOL - 3) y -= 0.02f; }
-            } else if (c == 4 || c == 5 || c == NCOL - 5 || c == NCOL - 6) {
-                /* the white edge line (asphalt) or a lighter verge (dirt / snow) */
-                alb = asphalt ? P->edge : col_mix(road, P->edge, 0.35f);
-                if (c == 5 || c == NCOL - 6) alb = road;
-            } else {
-                alb = road;
-            }
-            uint32_t col = track_light(alb, 0, 1, 0, x, y, z);
-            rv(&cur[c], x, y, z, col);
-            {
-                /* the colour this column has without a kerb (for the neighbouring quads) */
-                uint32_t bal = alb;
-                if (c == 2 || c == NCOL - 3) bal = col_mix(P->shoulder, P->runoff, 0.5f);
-                if (c == 3 || c == NCOL - 4) bal = asphalt ? P->edge : col_mix(road, P->edge, 0.35f);
-                curbase[c] = (bal == alb) ? col : track_light(bal, 0, 1, 0, x, y, z);
-            }
+    /* boost pads on the three straightest stretches */
+    nboost = 0;
+    for (int b = 0; b < 3; b++) {
+        float best = 1e9f; int bk = -1;
+        for (int k = 20; k < n - 20; k += 4) {
+            int near = 0;
+            for (int i = 0; i < nboost; i++) { int d = abs(k - boost_at[i]); if (d < n / 5) near = 1; }
+            if (near) continue;
+            float c = 0;
+            for (int j = -10; j <= 30; j++) c += fabsf(samples[(k + j + n) % n].curv);
+            if (c < best) { best = c; bk = k; }
         }
-        /* kerbs: each block is one flat colour, and the quads beside a kerb don't pick up its colour */
-        if (kk > 0) {
-            const TSample *ps = &samples[(kk - 1) % n];
-            for (int c = 0; c < NCOL - 1; c++) {
-                RV a = prev[c], b = prev[c + 1], d = cur[c], e = cur[c + 1];
-                int left = c == 2, right = c == NCOL - 4;
-                if (left || right) {
-                    int on = left ? ((ps->kerb & 1) && (s->kerb & 1)) : ((ps->kerb & 2) && (s->kerb & 2));
-                    if (on) {
-                        int blk = (((kk - 1) % n) / 2) & 1;
-                        uint32_t kc = track_light(blk ? P->kerb1 : P->kerb2, 0, 1, 0, a.x, a.y, a.z);
-                        a.c = b.c = d.c = e.c = kc;
-                    } else {
-                        a.c = prevbase[c]; b.c = prevbase[c + 1]; d.c = curbase[c]; e.c = curbase[c + 1];
-                    }
-                }
-                if (c == 1 || c == NCOL - 5) { b.c = prevbase[c + 1]; e.c = curbase[c + 1]; }
-                if (c == 3 || c == NCOL - 3) { a.c = prevbase[c]; d.c = curbase[c]; }
-                sm_tri(RM_OPAQUE, &a, &d, &b);
-                sm_tri(RM_OPAQUE, &b, &d, &e);
-            }
-        }
-        memcpy(prevbase, curbase, sizeof curbase);
-        memcpy(prev, cur, sizeof cur);
+        if (bk >= 0) boost_at[nboost++] = bk;
     }
-    /* dashed centre line on the city streets */
-    if (trk.info->theme == TH_HARBOR) {
-        for (int k = 0; k < n; k += 4) {
-            const TSample *s = &samples[k], *b = &samples[(k + 2) % n];
-            uint32_t c = track_light(0xE8D890FFu, 0, 1, 0, s->x, s->y, s->z);
-            float w = 0.18f;
+    const int NC = 9;
+    for (int k = 0; k < n; k++) {
+        int k2 = (k + 1) % n;
+        const TSample *a = &samples[k], *b = &samples[k2];
+        float la[9], lb[9];
+        for (int c = 0; c < NC; c++) {
+            float f = (float)c / (float)(NC - 1);
+            la[c] = -a->wl + (a->wl + a->wr) * f;
+            lb[c] = -b->wl + (b->wl + b->wr) * f;
+        }
+        int panel = (k / 5) & 1;
+        for (int c = 0; c < NC - 1; c++) {
+            float lm = (la[c] + la[c + 1]) * 0.5f;
+            uint32_t alb = panel ? P->deck : P->deck2;
+            if (fabsf(lm) > a->hw + 1.0f) alb = P->margin;
             RV v[4];
-            rv(&v[0], s->x - s->nx * w, s->y + 0.02f, s->z - s->nz * w, c);
-            rv(&v[1], s->x + s->nx * w, s->y + 0.02f, s->z + s->nz * w, c);
-            rv(&v[2], b->x + b->nx * w, b->y + 0.02f, b->z + b->nz * w, c);
-            rv(&v[3], b->x - b->nx * w, b->y + 0.02f, b->z - b->nz * w, c);
-            sm_quad(RM_OPAQUE, &v[0], &v[1], &v[2], &v[3]);
+            float ls[4] = { la[c], la[c + 1], lb[c + 1], lb[c] };
+            const TSample *ss[4] = { a, a, b, b };
+            for (int q = 0; q < 4; q++) {
+                float x = ss[q]->x + ss[q]->nx * ls[q], z = ss[q]->z + ss[q]->nz * ls[q], y = ss[q]->y;
+                float edge = smoothstep(2.5f, 0.0f, ss[q]->wl + ls[q] < ss[q]->wr - ls[q] ? ss[q]->wl + ls[q] : ss[q]->wr - ls[q]);
+                uint32_t col = track_light(col_scale(alb, 1.0f - 0.25f * edge), 0, 1, 0, x, y, z);
+                rv(&v[q], x, y, z, col);
+            }
+            sm_tri(RM_GROUND, &v[0], &v[1], &v[2]);
+            sm_tri(RM_GROUND, &v[0], &v[2], &v[3]);
+        }
+        /* glowing edge strips and corner chevrons */
+        for (int side = -1; side <= 1; side += 2) {
+            float wa = side < 0 ? a->wl : a->wr, wb = side < 0 ? b->wl : b->wr;
+            float y = a->y + 0.03f, yb = b->y + 0.03f;
+            float o0a = (float)side * (wa - 0.55f), o1a = (float)side * (wa - 0.25f), o0b = (float)side * (wb - 0.55f), o1b = (float)side * (wb - 0.25f);
+            emis_quad(RM_OPAQUE, a->x + a->nx * o0a, y, a->z + a->nz * o0a, a->x + a->nx * o1a, y, a->z + a->nz * o1a,
+                      b->x + b->nx * o1b, yb, b->z + b->nz * o1b, b->x + b->nx * o0b, yb, b->z + b->nz * o0b, P->accent);
+            int kerb = side < 0 ? (a->kerb & 1) : (a->kerb & 2);
+            if (kerb && ((k / 2) & 1)) {
+                float h0 = (float)side * a->hw, h1 = (float)side * (a->hw + 1.0f), g0 = (float)side * b->hw, g1 = (float)side * (b->hw + 1.0f);
+                emis_quad(RM_OPAQUE, a->x + a->nx * h0, y, a->z + a->nz * h0, a->x + a->nx * h1, y, a->z + a->nz * h1,
+                          b->x + b->nx * g1, yb, b->z + b->nz * g1, b->x + b->nx * g0, yb, b->z + b->nz * g0, P->accent2);
+            }
+            /* the deck's side skirt */
+            float sa = (float)side * wa, sb = (float)side * wb;
+            lit_quad(RM_OPAQUE, a->x + a->nx * sa, a->y - 1.6f, a->z + a->nz * sa, b->x + b->nx * sb, b->y - 1.6f, b->z + b->nz * sb,
+                     b->x + b->nx * sb, b->y, b->z + b->nz * sb, a->x + a->nx * sa, a->y, a->z + a->nz * sa, P->skirt);
+            emis_quad(RM_OPAQUE, a->x + a->nx * sa * 1.001f, a->y - 0.5f, a->z + a->nz * sa * 1.001f, b->x + b->nx * sb * 1.001f, b->y - 0.5f, b->z + b->nz * sb * 1.001f,
+                      b->x + b->nx * sb * 1.001f, b->y - 0.35f, b->z + b->nz * sb * 1.001f, a->x + a->nx * sa * 1.001f, a->y - 0.35f, a->z + a->nz * sa * 1.001f, col_scale(P->accent, 0.8f));
+            /* energy wall: posts and a glowing translucent band */
+            if ((k & 3) == 0) {
+                float px = a->x + a->nx * (float)side * (wa - 0.1f), pz = a->z + a->nz * (float)side * (wa - 0.1f);
+                lit_box(px, a->y, pz, 0.12f, 0.75f, 0.12f, 0, 0x3A4050FFu, 0x2A3040FFu);
+                emis_quad(RM_OPAQUE, px - 0.13f, a->y + 1.5f, pz - 0.13f, px + 0.13f, a->y + 1.5f, pz - 0.13f, px + 0.13f, a->y + 1.5f, pz + 0.13f, px - 0.13f, a->y + 1.5f, pz + 0.13f, P->accent);
+            }
+            RV w[4];
+            float wxa = a->x + a->nx * (float)side * (wa - 0.1f), wza = a->z + a->nz * (float)side * (wa - 0.1f);
+            float wxb = b->x + b->nx * (float)side * (wb - 0.1f), wzb = b->z + b->nz * (float)side * (wb - 0.1f);
+            uint32_t lo = col_seta(P->accent, 120), hi = col_seta(P->accent, 0);
+            rv(&w[0], wxa, a->y + 0.1f, wza, lo); rv(&w[1], wxb, b->y + 0.1f, wzb, lo);
+            rv(&w[2], wxb, b->y + 1.45f, wzb, hi); rv(&w[3], wxa, a->y + 1.45f, wza, hi);
+            sm_quad(RM_ADD, &w[0], &w[1], &w[2], &w[3]);
+            rv(&w[2], wxb, b->y + 1.45f, wzb, col_seta(P->accent, 200)); rv(&w[3], wxa, a->y + 1.45f, wza, col_seta(P->accent, 200));
+            rv(&w[0], wxa, a->y + 1.3f, wza, col_seta(P->accent, 0)); rv(&w[1], wxb, b->y + 1.3f, wzb, col_seta(P->accent, 0));
+            sm_quad(RM_ADD, &w[0], &w[1], &w[2], &w[3]);
+        }
+        /* centre line */
+        if ((k & 3) < 2) {
+            float y = a->y + 0.03f, w = 0.12f;
+            emis_quad(RM_OPAQUE, a->x - a->nx * w, y, a->z - a->nz * w, a->x + a->nx * w, y, a->z + a->nz * w,
+                      b->x + b->nx * w, b->y + 0.03f, b->z + b->nz * w, b->x - b->nx * w, b->y + 0.03f, b->z - b->nz * w, col_scale(P->accent, 0.55f));
+        }
+        /* boost pads: chevrons pointing down the track */
+        if (is_boost(k) && (k & 1) == 0) {
+            float y = a->y + 0.04f;
+            float cx = a->x + a->nx * a->line * 0.6f, cz = a->z + a->nz * a->line * 0.6f;
+            for (int sd = -1; sd <= 1; sd += 2) {
+                float x0 = cx + a->nx * (float)sd * 2.4f - a->tx * 1.2f, z0 = cz + a->nz * (float)sd * 2.4f - a->tz * 1.2f;
+                float x1 = cx + a->tx * 0.4f, z1 = cz + a->tz * 0.4f;
+                emis_quad(RM_OPAQUE, x0, y, z0, x1, y, z1, x1 + a->tx * 0.7f, y, z1 + a->tz * 0.7f, x0 + a->tx * 0.7f, y, z0 + a->tz * 0.7f, (k & 2) ? 0xFFD23AFFu : 0xFF8A2AFFu);
+            }
+            add_light(cx, y + 1.0f, cz, 0.0f, 0xFFB040FFu, 1.6f);
+        }
+        /* pylons under the deck */
+        if (k % 22 == 0) {
+            float gy = terrain_height(a->x, a->z);
+            if (gy < a->y - 2.0f) {
+                lit_prism(a->x, gy - 0.5f, a->z, 1.3f, 0.9f, a->y - 1.6f - gy + 0.5f, 8, 0, 0x4A5060FFu, 0);
+                emis_quad(RM_OPAQUE, a->x - 1.0f, a->y - 2.4f, a->z - 1.0f, a->x + 1.0f, a->y - 2.4f, a->z - 1.0f, a->x + 1.0f, a->y - 2.4f, a->z + 1.0f, a->x - 1.0f, a->y - 2.4f, a->z + 1.0f, P->accent);
+            }
+        }
+        /* gates across the track */
+        if (k % 130 == 0) {
+            float lx = a->x - a->nx * (a->wl + 0.6f), lz = a->z - a->nz * (a->wl + 0.6f), rx = a->x + a->nx * (a->wr + 0.6f), rz = a->z + a->nz * (a->wr + 0.6f);
+            lit_box(lx, a->y, lz, 0.5f, 3.6f, 0.5f, 0, 0x3A4252FFu, 0x2E3440FFu);
+            lit_box(rx, a->y, rz, 0.5f, 3.6f, 0.5f, 0, 0x3A4252FFu, 0x2E3440FFu);
+            float by = a->y + 7.2f, t = 0.4f;
+            lit_quad(RM_OPAQUE, rx - a->tx * t, by, rz - a->tz * t, lx - a->tx * t, by, lz - a->tz * t, lx - a->tx * t, by + 1.0f, lz - a->tz * t, rx - a->tx * t, by + 1.0f, rz - a->tz * t, 0x3A4252FFu);
+            lit_quad(RM_OPAQUE, lx - a->tx * t, by + 1.0f, lz - a->tz * t, lx + a->tx * t, by + 1.0f, lz + a->tz * t, rx + a->tx * t, by + 1.0f, rz + a->tz * t, rx - a->tx * t, by + 1.0f, rz - a->tz * t, 0x4A5262FFu);
+            emis_quad(RM_OPAQUE, rx - a->tx * (t + 0.01f), by + 0.25f, rz - a->tz * (t + 0.01f), lx - a->tx * (t + 0.01f), by + 0.25f, lz - a->tz * (t + 0.01f),
+                      lx - a->tx * (t + 0.01f), by + 0.55f, lz - a->tz * (t + 0.01f), rx - a->tx * (t + 0.01f), by + 0.55f, rz - a->tz * (t + 0.01f), k == 0 ? 0xFFFFFFFFu : P->accent2);
+            for (int i = 1; i < 8; i++) {
+                float f = (float)i / 8.0f;
+                add_light(lx + (rx - lx) * f, by - 0.1f, lz + (rz - lz) * f, 0.0f, P->accent2, 0.6f);
+            }
         }
     }
-    /* start / finish: a chequered band and the grid slots */
+    /* chequered start band */
     {
         const TSample *s = &samples[0];
-        int cols = 12;
+        int cols = 14;
         for (int r = 0; r < 2; r++)
             for (int c = 0; c < cols; c++) {
-                float l0 = -s->hw + 2 * s->hw * (float)c / (float)cols, l1 = -s->hw + 2 * s->hw * (float)(c + 1) / (float)cols;
-                float a0 = -1.0f + (float)r, a1 = a0 + 1.0f;
-                uint32_t alb = ((r + c) & 1) ? 0x202024FFu : 0xF4F4F4FFu;
-                uint32_t col = track_light(alb, 0, 1, 0, s->x, s->y, s->z);
-                RV v[4];
-                float y = s->y + 0.03f;
-                rv(&v[0], s->x + s->nx * l0 + s->tx * a0, y, s->z + s->nz * l0 + s->tz * a0, col);
-                rv(&v[1], s->x + s->nx * l1 + s->tx * a0, y, s->z + s->nz * l1 + s->tz * a0, col);
-                rv(&v[2], s->x + s->nx * l1 + s->tx * a1, y, s->z + s->nz * l1 + s->tz * a1, col);
-                rv(&v[3], s->x + s->nx * l0 + s->tx * a1, y, s->z + s->nz * l0 + s->tz * a1, col);
-                sm_quad(RM_OPAQUE, &v[0], &v[3], &v[2], &v[1]);
+                float l0 = -s->wl + (s->wl + s->wr) * (float)c / (float)cols, l1 = -s->wl + (s->wl + s->wr) * (float)(c + 1) / (float)cols;
+                float a0 = -1.0f + (float)r, a1 = a0 + 1.0f, y = s->y + 0.05f;
+                uint32_t col = ((r + c) & 1) ? 0x1A1A20FFu : 0xF4F4F4FFu;
+                emis_quad(RM_OPAQUE, s->x + s->nx * l0 + s->tx * a0, y, s->z + s->nz * l0 + s->tz * a0, s->x + s->nx * l0 + s->tx * a1, y, s->z + s->nz * l0 + s->tz * a1,
+                          s->x + s->nx * l1 + s->tx * a1, y, s->z + s->nz * l1 + s->tz * a1, s->x + s->nx * l1 + s->tx * a0, y, s->z + s->nz * l1 + s->tz * a0, col);
             }
-        /* grid boxes: white L brackets */
-        for (int g = 0; g < 8; g++) {
-            float back = 7.0f + (float)g * 5.0f, lat = (g & 1) ? 3.2f : -3.2f;
-            float x, z;
-            track_point(trk.length - back, lat, &x, &z);
-            int k = track_sample_at(trk.length - back);
-            const TSample *t = &samples[k];
-            uint32_t col = track_light(0xF0F0F0FFu, 0, 1, 0, x, t->y, z);
-            float y = t->y + 0.03f;
-            for (int side = -1; side <= 1; side += 2) {
-                float l0 = side * 1.5f, l1 = side * 1.25f;
-                RV v[4];
-                rv(&v[0], x + t->nx * l0 + t->tx * 1.4f, y, z + t->nz * l0 + t->tz * 1.4f, col);
-                rv(&v[1], x + t->nx * l1 + t->tx * 1.4f, y, z + t->nz * l1 + t->tz * 1.4f, col);
-                rv(&v[2], x + t->nx * l1 - t->tx * 0.6f, y, z + t->nz * l1 - t->tz * 0.6f, col);
-                rv(&v[3], x + t->nx * l0 - t->tx * 0.6f, y, z + t->nz * l0 - t->tz * 0.6f, col);
-                sm_quad(RM_OPAQUE, &v[0], &v[3], &v[2], &v[1]);
-            }
-            RV v[4];
-            rv(&v[0], x - t->nx * 1.5f + t->tx * 1.4f, y, z - t->nz * 1.5f + t->tz * 1.4f, col);
-            rv(&v[1], x + t->nx * 1.5f + t->tx * 1.4f, y, z + t->nz * 1.5f + t->tz * 1.4f, col);
-            rv(&v[2], x + t->nx * 1.5f + t->tx * 1.15f, y, z + t->nz * 1.5f + t->tz * 1.15f, col);
-            rv(&v[3], x - t->nx * 1.5f + t->tx * 1.15f, y, z - t->nz * 1.5f + t->tz * 1.15f, col);
-            sm_quad(RM_OPAQUE, &v[0], &v[3], &v[2], &v[1]);
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* barriers along both walls                                           */
-/* ------------------------------------------------------------------ */
-static void wall_pt(int k, int side, float extra, float *x, float *z)
-{
-    const TSample *s = &samples[k];
-    float o = side < 0 ? -(s->wl + extra) : (s->wr + extra);
-    *x = s->x + s->nx * o; *z = s->z + s->nz * o;
-}
-
-static void build_barriers(void)
-{
-    int n = trk.n, th = trk.info->theme;
-    for (int side = -1; side <= 1; side += 2) {
-        for (int k = 0; k < n; k += 2) {
-            int k2 = (k + 2) % n;
-            const TSample *s = &samples[k];
-            float x0, z0, x1, z1, xo0, zo0, xo1, zo1;
-            wall_pt(k, side, 0.0f, &x0, &z0);
-            wall_pt(k2, side, 0.0f, &x1, &z1);
-            wall_pt(k, side, 0.6f, &xo0, &zo0);
-            wall_pt(k2, side, 0.6f, &xo1, &zo1);
-            float y0 = s->y - 0.05f, y1 = samples[k2].y - 0.05f;
-            float ac = fabsf(s->curv);
-            int outside = (s->curv > 0 && side < 0) || (s->curv < 0 && side > 0);
-            /* the inner face (towards the track) runs from (x1,z1) to (x0,z0) for side < 0 so it faces the road */
-            float ax = x0, az = z0, bx = x1, bz = z1, aox = xo0, aoz = zo0, box_ = xo1, boz = zo1;
-            if (side > 0) { ax = x1; az = z1; bx = x0; bz = z0; aox = xo1; aoz = zo1; box_ = xo0; boz = zo0; float t = y0; y0 = y1; y1 = t; }
-            switch (th) {
-            case TH_FOREST:
-            case TH_CANYON:
-                if (th == TH_FOREST && outside && ac > 0.016f) {
-                    /* tyre wall: stacked red and white tyres */
-                    uint32_t c = ((k / 2) & 1) ? 0xD83A30FFu : 0xF2F2F0FFu;
-                    float cx = (x0 + xo0) * 0.5f, cz = (z0 + zo0) * 0.5f;
-                    lit_prism(cx, s->y - 0.05f, cz, 0.55f, 0.55f, 0.5f, 6, 0.3f, 0x2A2A2EFFu, 0);
-                    lit_prism(cx, s->y + 0.45f, cz, 0.55f, 0.55f, 0.5f, 6, 0.0f, c, 1);
-                    float cx2 = (x0 + x1 + xo0 + xo1) * 0.25f, cz2 = (z0 + z1 + zo0 + zo1) * 0.25f;
-                    lit_prism(cx2, (y0 + y1) * 0.5f, cz2, 0.55f, 0.55f, 0.5f, 6, 0.0f, 0x2A2A2EFFu, 0);
-                    lit_prism(cx2, (y0 + y1) * 0.5f + 0.5f, cz2, 0.55f, 0.55f, 0.5f, 6, 0.3f, c == 0xD83A30FFu ? 0xF2F2F0FFu : 0xD83A30FFu, 1);
-                } else {
-                    /* armco: two-faced rail on posts */
-                    uint32_t rail = th == TH_CANYON ? 0xC8C6C0FFu : 0xD6DADEFFu;
-                    lit_quad(RM_OPAQUE, ax, y0 + 0.35f, az, bx, y1 + 0.35f, bz, bx, y1 + 0.75f, bz, ax, y0 + 0.75f, az, rail);
-                    lit_quad(RM_OPAQUE, bx, y1 + 0.35f, bz, ax, y0 + 0.35f, az, ax, y0 + 0.75f, az, bx, y1 + 0.75f, bz, col_scale(rail, 0.8f));
-                    lit_quad(RM_OPAQUE, ax, y0 + 0.75f, az, bx, y1 + 0.75f, bz, box_, y1 + 0.75f, boz, aox, y0 + 0.75f, aoz, rail);
-                    if ((k & 3) == 0) {
-                        float px = (x0 + xo0) * 0.5f + (xo0 - x0) * 0.4f, pz = (z0 + zo0) * 0.5f + (zo0 - z0) * 0.4f;
-                        lit_box(px, s->y - 0.1f, pz, 0.09f, 0.42f, 0.09f, 0, 0x5A4A3AFFu, th == TH_CANYON ? 0x4A3A2AFFu : 0x606468FFu);
-                    }
-                }
-                break;
-            case TH_SNOW: {
-                /* a rounded snow bank */
-                uint32_t sn = 0xF4F8FFFFu;
-                float h0 = 0.9f + 0.4f * vnoise((float)k * 0.3f, (float)side, 4), h1 = 0.9f + 0.4f * vnoise((float)k2 * 0.3f, (float)side, 4);
-                float xm0, zm0, xm1, zm1, xf0, zf0, xf1, zf1;
-                wall_pt(k, side, 1.0f, &xm0, &zm0); wall_pt(k2, side, 1.0f, &xm1, &zm1);
-                wall_pt(k, side, 2.6f, &xf0, &zf0); wall_pt(k2, side, 2.6f, &xf1, &zf1);
-                if (side > 0) { float t; t = xm0; xm0 = xm1; xm1 = t; t = zm0; zm0 = zm1; zm1 = t; t = xf0; xf0 = xf1; xf1 = t; t = zf0; zf0 = zf1; zf1 = t; t = h0; h0 = h1; h1 = t; }
-                lit_quad(RM_OPAQUE, ax, y0 - 0.1f, az, bx, y1 - 0.1f, bz, xm1, y1 + h1, zm1, xm0, y0 + h0, zm0, sn);
-                lit_quad(RM_OPAQUE, xm0, y0 + h0, zm0, xm1, y1 + h1, zm1, xf1, y1 - 0.1f, zf1, xf0, y0 - 0.1f, zf0, sn);
-                if (outside && ac > 0.014f) {
-                    /* orange safety netting on poles */
-                    uint32_t net = 0xF08A2AFFu;
-                    lit_quad(RM_OPAQUE, xm0, y0 + h0 + 0.1f, zm0, xm1, y1 + h1 + 0.1f, zm1, xm1, y1 + h1 + 0.9f, zm1, xm0, y0 + h0 + 0.9f, zm0, net);
-                    lit_quad(RM_OPAQUE, xm1, y1 + h1 + 0.1f, zm1, xm0, y0 + h0 + 0.1f, zm0, xm0, y0 + h0 + 0.9f, zm0, xm1, y1 + h1 + 0.9f, zm1, col_scale(net, 0.8f));
-                }
-                break;
-            }
-            case TH_HARBOR: {
-                /* concrete blocks, painted at the corners */
-                uint32_t cc = (outside && ac > 0.012f) ? (((k / 2) & 1) ? 0xE84030FFu : 0xF2F2F0FFu) : 0xB4B6B8FFu;
-                lit_quad(RM_OPAQUE, ax, y0, az, bx, y1, bz, bx, y1 + 0.9f, bz, ax, y0 + 0.9f, az, cc);
-                lit_quad(RM_OPAQUE, ax, y0 + 0.9f, az, bx, y1 + 0.9f, bz, box_, y1 + 0.9f, boz, aox, y0 + 0.9f, aoz, col_scale(cc, 1.05f));
-                lit_quad(RM_OPAQUE, box_, y1, boz, aox, y0, aoz, aox, y0 + 0.9f, aoz, box_, y1 + 0.9f, boz, cc);
-                break;
-            }
-            default: {
-                /* wooden ranch fence */
-                uint32_t wood = 0x8A5A38FFu;
-                for (int r = 0; r < 2; r++) {
-                    float yy = 0.45f + 0.45f * (float)r;
-                    lit_quad(RM_OPAQUE, ax, y0 + yy, az, bx, y1 + yy, bz, bx, y1 + yy + 0.16f, bz, ax, y0 + yy + 0.16f, az, wood);
-                    lit_quad(RM_OPAQUE, ax, y0 + yy + 0.16f, az, bx, y1 + yy + 0.16f, bz, box_, y1 + yy + 0.16f, boz, aox, y0 + yy + 0.16f, aoz, col_scale(wood, 1.15f));
-                }
-                if ((k & 3) == 0) lit_box(x0, s->y - 0.05f, z0, 0.12f, 0.6f, 0.12f, 0, 0x9A6A44FFu, 0x6E4628FFu);
-                break;
-            }
-            }
-        }
     }
 }
 
@@ -1061,14 +1074,14 @@ void track_load(int id)
     float sl = sqrtf(I->sun[0] * I->sun[0] + I->sun[1] * I->sun[1] + I->sun[2] * I->sun[2]);
     for (int k = 0; k < 3; k++) L_sun[k] = I->sun[k] / sl;
     col3(I->sun_col, L_sunc); col3(I->sky_col, L_sky); col3(I->gnd_col, L_gnd);
-    float sk = I->night ? 0.75f : 0.62f, gk = I->night ? 0.6f : 0.45f, sc = I->night ? 0.45f : 0.82f;
+    float sk = I->night ? 0.8f : 0.66f, gk = I->night ? 0.6f : 0.5f, sc = I->night ? 0.45f : 0.88f;
     for (int k = 0; k < 3; k++) { L_sky[k] *= sk; L_gnd[k] *= gk; L_sunc[k] *= sc; }
 
     build_centre(D);
     {
         float lo = 1e9f;
         for (int k = 0; k < trk.n; k++) if (samples[k].y < lo) lo = samples[k].y;
-        trk.water = lo + D->water;
+        trk.water = lo - HOVER_ELEV + D->water;
     }
     build_widths(D);
     build_racing_line();
@@ -1077,10 +1090,18 @@ void track_load(int id)
     sm_reset(trk.minx - 10, trk.minz - 10, trk.maxx + 10, trk.maxz + 10);
     scenery_plan();
     light_buckets();
+    int n0 = sm_tri_count();
     build_terrain();
-    build_road();
-    build_barriers();
+    int n1 = sm_tri_count();
+    build_hover_track();
+    int n2 = sm_tri_count();
     scenery_build();
+    int n3 = sm_tri_count();
+#ifdef TRACK_STATS
+    printf("  terrain %d  track %d  scenery %d\n", n1 - n0, n2 - n1, n3 - n2);
+#else
+    (void)n0; (void)n1; (void)n2; (void)n3;
+#endif
     sm_finish();
 }
 

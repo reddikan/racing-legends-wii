@@ -11,13 +11,16 @@ static int sm_vis;
 
 RV   *r_v;
 int   r_nv;
+TV   *r_tv;
+int   r_ntv;
 RCmd  r_cmd[R_MAX_CMD];
 int   r_ncmd;
 uint32_t r_clear;
 RCam  r_cam;
 float r_post_top, r_post_bot;
+float r_fx_split = 1.0f;
 
-static int cur_mode = -1, cur_2d = 0;
+static int cur_mode = -1, cur_2d = 0, seg_mode = 0;
 
 uint32_t col_mix(uint32_t a, uint32_t b, float t)
 {
@@ -77,14 +80,18 @@ static void new_seg(int type, int mode)
 void r3d_begin(uint32_t clear)
 {
     if (!r_v) r_v = (RV *)big_alloc(sizeof(RV) * R_MAX_VTX);
+    if (!r_tv) r_tv = (TV *)big_alloc(sizeof(TV) * R_MAX_TVTX);
+    r_ntv = 0;
     r_nv = 0; r_ncmd = 0; r_clear = clear;
     cur_mode = -1; cur_2d = 0;
     r_post_top = r_post_bot = 0.0f;
+    r_fx_split = 1.0f;
     r3d_mode(RM_OPAQUE);
 }
 
 void r3d_mode(int mode)
 {
+    seg_mode = mode;
     if (mode == cur_mode && !cur_2d && r_ncmd > 0 && r_cmd[r_ncmd - 1].type == RC_TRIS) return;
     cur_mode = mode; cur_2d = 0;
     new_seg(RC_TRIS, mode);
@@ -92,6 +99,7 @@ void r3d_mode(int mode)
 
 void ui_begin(int mode)
 {
+    seg_mode = mode;
     if (mode == cur_mode && cur_2d && r_ncmd > 0 && r_cmd[r_ncmd - 1].type == RC_2D) return;
     cur_mode = mode; cur_2d = 1;
     new_seg(RC_2D, mode);
@@ -104,6 +112,21 @@ void r3d_mesh(int id, int mode)
     RCmd *c = &r_cmd[r_ncmd++];
     c->type = RC_MESH; c->mode = (uint8_t)mode; c->mesh = (uint16_t)id; c->start = 0; c->count = 0;
     cur_mode = -1;
+}
+
+void r3d_text_tri(const TV *a, const TV *b, const TV *c)
+{
+    if (r_ntv + 3 > R_MAX_TVTX) return;
+    RCmd *l = r_ncmd > 0 ? &r_cmd[r_ncmd - 1] : NULL;
+    if (!l || l->type != RC_TEXT) {
+        if (l && (l->type == RC_TRIS || l->type == RC_2D) && l->count == 0) r_ncmd--;
+        if (r_ncmd >= R_MAX_CMD) return;
+        l = &r_cmd[r_ncmd++];
+        l->type = RC_TEXT; l->mode = RM_ALPHA; l->mesh = 0; l->start = r_ntv; l->count = 0;
+        cur_mode = -1;
+    }
+    r_tv[r_ntv++] = *a; r_tv[r_ntv++] = *b; r_tv[r_ntv++] = *c;
+    l->count += 3;
 }
 
 void r3d_post(void)
@@ -125,6 +148,7 @@ void r3d_tri3(float x0, float y0, float z0, uint32_t c0, float x1, float y1, flo
               float x2, float y2, float z2, uint32_t c2)
 {
     if (r_nv + 3 > R_MAX_VTX || r_ncmd == 0) return;
+    if (r_cmd[r_ncmd - 1].type == RC_TEXT || r_cmd[r_ncmd - 1].type == RC_POST || r_cmd[r_ncmd - 1].type == RC_MESH) { new_seg(cur_2d ? RC_2D : RC_TRIS, seg_mode); cur_mode = seg_mode; }
     if (cur_mode != RM_OPAQUE && ((c0 | c1 | c2) & 255) == 0) return;
     put(x0, y0, z0, c0); put(x1, y1, z1, c1); put(x2, y2, z2, c2);
     r_cmd[r_ncmd - 1].count += 3;
@@ -236,8 +260,8 @@ void r3d_blob(float x, float y, float z, float rx, float rz, float ang, uint32_t
 /* static chunk grid                                                   */
 /* ------------------------------------------------------------------ */
 #define SM_MAXG 40                     /* up to 40 x 40 chunks (1.9 km square) */
-#define SM_POOL_V 960000               /* build buffer: vertices of every chunk (320k triangles) */
-#define SM_CHUNK_V 120000              /* most vertices one chunk + mode can hold */
+#define SM_POOL_V 1050000              /* build buffer: up to 350k static triangles */
+#define SM_CHUNK_V 240000              /* most vertices one chunk + mode can hold */
 
 typedef struct { int n, cap, off; } SmBin;
 static RV    *sm_pool;                 /* the triangles as they arrive (unsorted) */
@@ -390,3 +414,42 @@ void sm_draw(float margin)
 }
 
 int sm_visible_tris(void) { return sm_vis; }
+
+/* ------------------------------------------------------------------ */
+/* shared textures                                                     */
+/* ------------------------------------------------------------------ */
+static float thash(int x, int y) { unsigned h = (unsigned)x * 73856093u ^ (unsigned)y * 19349663u; h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15; return (float)(h & 0xFFFF) / 65535.0f; }
+
+static float tnoise(float x, float y, int per)          /* tiling value noise */
+{
+    int ix = (int)floorf(x), iy = (int)floorf(y);
+    float fx = x - (float)ix, fy = y - (float)iy;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    int x0 = ((ix % per) + per) % per, y0 = ((iy % per) + per) % per, x1 = (x0 + 1) % per, y1 = (y0 + 1) % per;
+    float a = thash(x0, y0), b = thash(x1, y0), c = thash(x0, y1), d = thash(x1, y1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+
+void r3d_make_detail(uint8_t *out)
+{
+    const int N = R_DETAIL_SIZE;
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+            float g = thash(x, y) - 0.5f;
+            float m = tnoise((float)x / 16.0f, (float)y / 16.0f, N / 16) - 0.5f;
+            float f = tnoise((float)x / 4.0f, (float)y / 4.0f, N / 4) - 0.5f;
+            float v = 1.0f + g * 0.10f + f * 0.10f + m * 0.16f;
+            int b = (int)(v * 128.0f + 0.5f);
+            out[y * N + x] = (uint8_t)(b < 0 ? 0 : (b > 255 ? 255 : b));
+        }
+}
+
+void r3d_make_grain(uint8_t *out)
+{
+    const int N = R_GRAIN_SIZE;
+    for (int y = 0; y < N; y++)
+        for (int x = 0; x < N; x++) {
+            float n = (thash(x + 977, y + 331) + thash(x * 3 + 5, y * 7 + 1) * 0.5f) / 1.5f;
+            out[y * N + x] = (uint8_t)(n * 255.0f);
+        }
+}

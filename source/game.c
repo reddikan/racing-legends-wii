@@ -46,6 +46,7 @@ static void save_defaults(void)
     sv.laps = 3;
     sv.wide = 1;
     sv.tilt = 1;
+    sv.units = 1;
     sv.owned_body = 1;
     sv.body = 0; sv.paint = 0; sv.paint2 = 4; sv.livery = 1;
     sv.sfx_vol = 10;
@@ -73,18 +74,30 @@ void game_load(const char *buf, int n)
     if (n != (int)sizeof sv) return;
     Save s;
     memcpy(&s, buf, sizeof s);
+    if (s.magic == SAVE_MAGIC_V1) {
+        /* a v1 (car racing) save: keep the credits, upgrades and unlocked tracks */
+        if (s.owned_body & 8) s.credits += 4000;          /* v1's fourth car is gone: refund it */
+        s.owned_body &= 7;
+        if (s.body > 2) s.body = 0;
+        s.units = 1;
+        s.secret = 0;
+        s.livery = s.livery > 3 ? 1 : s.livery;
+        for (int i = 0; i < NUM_TRACKS; i++) { s.best_lap[i] = 0; s.best_race[i] = 0; }   /* new tracks, new records */
+        s.magic = SAVE_MAGIC;
+        g.dirty = 1;
+    }
     if (s.magic != SAVE_MAGIC) return;
     sv = s;
     if (sv.unlocked < 1 || sv.unlocked > NUM_TRACKS) sv.unlocked = 1;
     if (sv.laps < 1 || sv.laps > 5) sv.laps = 3;
     if (sv.body >= NUM_BODIES) sv.body = 0;
+    if (sv.body == BODY_FUTURE88 && !sv.secret) sv.body = 0;
     if (sv.paint >= NUM_PAINTS) sv.paint = 0;
     if (sv.paint2 >= NUM_PAINTS) sv.paint2 = 4;
     if (sv.livery > 3) sv.livery = 0;
     if (sv.cam >= NUM_CAMS) sv.cam = 0;
     sv.owned_body |= 1;
     for (int i = 0; i < NUM_UPGRADES; i++) if (sv.lv[i] > UP_MAX) sv.lv[i] = UP_MAX;
-    if (sv.lv[UP_TANK] > 3) sv.lv[UP_TANK] = 3;
 }
 
 int game_wants_wide(void) { return sv.wide; }
@@ -96,8 +109,8 @@ void game_init(void)
     memset(&g, 0, sizeof g);
     save_defaults();
     cars_models_init();
-    track_load(0);
-    race_setup(0, 3, 1);
+    track_load(3);
+    race_setup(3, 3, 1);
     g.state = ST_TITLE;
     g.track_sel = 0;
 }

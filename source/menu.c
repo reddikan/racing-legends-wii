@@ -14,13 +14,13 @@
 #define CYAN      0x3AD8FFFFu
 #define DARKTXT   0x101018FFu
 
-static const char *UP_NAME[NUM_UPGRADES] = { "ENGINE", "TURBO", "TIRES", "NITRO TANK", "NITRO POWER", "DRIFT KIT" };
+static const char *UP_NAME[NUM_UPGRADES] = { "ENGINE", "THRUSTERS", "MAG GRIP", "RECHARGE", "BOOST POWER", "DRIFT KIT" };
 static const char *UP_DESC[NUM_UPGRADES] = {
     "RAISES TOP SPEED", "FASTER ACCELERATION", "MORE GRIP AND SHARPER HANDLING",
-    "CARRY MORE NITRO BOOSTS", "STRONGER, FASTER BOOSTS", "DRIFTS CHARGE QUICKER, BANK MORE NITRO" };
-static const int UP_LEVELS[NUM_UPGRADES] = { 5, 5, 5, 3, 5, 5 };
-static const int BODY_PRICE[NUM_BODIES] = { 0, 1500, 2500, 4000 };
-static const char *LIVERY_NAME[4] = { "CLEAN", "RACING STRIPES", "TWO-TONE", "CONTRAST ROOF" };
+    "THE BOOST RECHARGES FASTER", "STRONGER, FASTER BOOSTS", "DRIFTS CHARGE QUICKER AND TOP UP THE BOOST" };
+static const int UP_LEVELS[NUM_UPGRADES] = { 5, 5, 5, 5, 5, 5 };
+static const int BODY_PRICE[NUM_BODIES] = { 0, 1500, 2500, 0 };
+static const char *LIVERY_NAME[5] = { "CLEAN", "RACING STRIPES", "TWO-TONE", "CONTRAST ROOF", "LIQUID SILVER" };
 
 int upgrade_cost(int up, int level)
 {
@@ -119,8 +119,36 @@ static int nav(const Input *in, int *v, int n, uint32_t dec, uint32_t inc)
     return moved;
 }
 
+/* the secret code: Up Up Down Down Left Right Left Right B A */
+static const uint32_t CODE[10] = { BTN_UP, BTN_UP, BTN_DOWN, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_LEFT, BTN_RIGHT, BTN_B, BTN_A };
+
+static int code_step(const Input *in)
+{
+    const uint32_t keys = BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT | BTN_A | BTN_B | BTN_X | BTN_Y;
+    uint32_t p = in->pressed & keys;
+    if (!p) return 0;
+    if (p == CODE[g.code_pos]) {
+        g.code_pos++;
+        if (g.code_pos == 10) { g.code_pos = 0; return 1; }
+    } else {
+        g.code_pos = p == CODE[0] ? 1 : 0;
+    }
+    return 0;
+}
+
 static void title_update(const Input *in)
 {
+    if (g.unlock_t > 0) {
+        /* the unlock card is up: A or B closes it */
+        if (g.unlock_t > 0.8f && (in->pressed & (BTN_A | BTN_B))) { g.unlock_t = 0; snd(SND_UI_OK, 0.7f, 1.0f, 0); }
+        return;
+    }
+    if (code_step(in)) {
+        if (!sv.secret) { sv.secret = 1; sv.owned_body |= (uint8_t)(1 << BODY_FUTURE88); save_mark_dirty(); }
+        g.unlock_t = 0.001f;
+        snd(SND_UNLOCK, 1.0f, 1.0f, 0);
+        return;
+    }
     nav(in, &g.cursor, 4, BTN_UP, BTN_DOWN);
     if (in->pressed & BTN_A) {
         snd(SND_UI_OK, 0.7f, 1.0f, 0);
@@ -165,15 +193,17 @@ static void garage_update(const Input *in)
             else { sv.credits -= c; sv.lv[u]++; snd(SND_UI_BUY, 0.8f, 1.0f, 0); save_mark_dirty(); g.menu_anim = 0; }
         }
     } else if (g.tab == 1) {
-        nav(in, &g.cursor, NUM_BODIES, BTN_UP, BTN_DOWN);
+        nav(in, &g.cursor, sv.secret ? NUM_BODIES : NUM_BODIES - 1, BTN_UP, BTN_DOWN);
         int b = g.cursor;
         if ((sv.owned_body >> b) & 1) { if (sv.body != b) { sv.body = (uint8_t)b; save_mark_dirty(); } }
+        else if (b == BODY_FUTURE88) { /* hidden until the code is entered */ }
         else if (in->pressed & BTN_A) {
             if (sv.credits >= BODY_PRICE[b]) { sv.credits -= BODY_PRICE[b]; sv.owned_body |= (uint8_t)(1 << b); sv.body = (uint8_t)b; snd(SND_UI_BUY, 0.8f, 1.0f, 0); save_mark_dirty(); }
             else { snd(SND_UI_ERR, 0.6f, 1.0f, 0); g.confirm = 30; }
         }
     } else {
         nav(in, &g.cursor, 3, BTN_UP, BTN_DOWN);
+        if (sv.body == BODY_FUTURE88) return;
         int ch = 0;
         if (in->pressed & BTN_LEFT) ch = -1;
         if (in->pressed & BTN_RIGHT) ch = 1;
@@ -239,6 +269,7 @@ void menu_update(const Input *in, float dt)
         }
         prev_ready = 1;
     }
+    if (g.unlock_t > 0) g.unlock_t += dt;
     switch (g.state) {
     case ST_TITLE: title_update(in); break;
     case ST_TRACKS: tracks_update(in); break;
@@ -261,6 +292,47 @@ static void menu_item(float x, float y, float w, const char *s, int sel, float t
     ui_text_weight(sel ? 1.4f : 1.1f);
     ui_text(s, x + slide + 22, y + 11, 16, sel ? DARKTXT : WHITE);
     ui_text_weight(1.0f);
+}
+
+/* the FUTURE 88 unlock card: a flash, the band sweeps in, the name slams down */
+static void unlock_render(void)
+{
+    float t = g.unlock_t;
+    float a = smooth01(t * 4.0f);
+    ui_rect(0, 0, VW, VH, col_a(0x02040CC0u, a));
+    /* the flash */
+    if (t < 0.35f) {
+        ui_begin(RM_ADD);
+        ui_rect(0, 0, VW, VH, col_a(0xBFEFFFFFu, (0.35f - t) / 0.35f * 0.8f));
+        ui_begin(RM_ALPHA);
+    }
+    float sweep = smooth01((t - 0.05f) * 3.0f);
+    float bw = VW * sweep;
+    ui_slant_h(VW * 0.5f - bw * 0.5f, 150, bw, 180, 0, 0x0A2A6AE8u, 0x1A6AD8E8u);
+    ui_rect(VW * 0.5f - bw * 0.5f, 150, bw, 3, 0x3AF0FFFFu);
+    ui_rect(VW * 0.5f - bw * 0.5f, 327, bw, 3, 0x3AF0FFFFu);
+    /* light streaks running along the band */
+    ui_begin(RM_ADD);
+    for (int i = 0; i < 6; i++) {
+        float y = 160.0f + (float)i * 28.0f, x = fmodf(t * (500.0f + 90.0f * (float)i) + (float)i * 211.0f, VW + 300.0f) - 150.0f;
+        ui_rect_h(x - 160, y, 160, 2, 0x3AD8FF00u, col_a(0x9AE8FFFFu, 0.6f * sweep));
+    }
+    ui_begin(RM_ALPHA);
+    if (t > 0.3f) ui_text_sc("CODE ACCEPTED  -  UP UP DOWN DOWN LEFT RIGHT LEFT RIGHT B A", VW * 0.5f, 172, 14, col_a(0xBFEFFFFFu, smooth01((t - 0.3f) * 4.0f)));
+    if (t > 0.45f) {
+        float k = smooth01((t - 0.45f) * 5.0f), sc = 1.0f + (1.0f - k) * 1.2f;
+        ui_text_weight(1.6f);
+        /* chromatic copies settle into place */
+        float o = (1.0f - k) * 14.0f + 2.0f * sinf(t * 30.0f) * (t < 1.2f ? 1.0f : 0.15f);
+        ui_begin(RM_ADD);
+        ui_text_c("FUTURE 88", VW * 0.5f - o, 202 - 30 * (sc - 1.0f), 64 * sc, col_a(0x3AF0FFFFu, 0.7f * k));
+        ui_text_c("FUTURE 88", VW * 0.5f + o, 202 - 30 * (sc - 1.0f), 64 * sc, col_a(0x3A6AFFFFu, 0.7f * k));
+        ui_begin(RM_ALPHA);
+        ui_text_sc("FUTURE 88", VW * 0.5f, 202 - 30 * (sc - 1.0f), 64 * sc, col_a(0xFFFFFFFFu, k));
+        ui_text_weight(1.0f);
+    }
+    if (t > 0.9f) ui_text_sc("HIDDEN CRAFT UNLOCKED  -  NOW IN YOUR GARAGE", VW * 0.5f, 290, 16, col_a(0x3AE0FFFFu, smooth01((t - 0.9f) * 4.0f)));
+    if (t > 1.2f) ui_text_c("A  CONTINUE", VW * 0.5f, VH - 40, 14, col_a(0xFFD23AFFu, 0.6f + 0.4f * sinf(g.t * 5.0f)));
 }
 
 static void title_render(void)
@@ -354,8 +426,8 @@ static void tracks_render(void)
     draw_track_map(id, px + 30 + (1 - a) * 20, py + 96, 220, 176, col_a(0xE8ECF4FFu, a), 3.5f);
     char buf[48], t[16];
     float sx = px + 280;
-    ui_text("SURFACE", sx, py + 104, 8, DIM);
-    ui_text(I->surface == SURF_ASPHALT ? "ASPHALT" : (I->surface == SURF_DIRT ? "DIRT" : "SNOW"), sx, py + 118, 12, WHITE);
+    ui_text("DECK", sx, py + 104, 8, DIM);
+    ui_text(I->surface == SURF_ASPHALT ? "MAG DECK" : (I->surface == SURF_DIRT ? "DUST DECK" : "ICE DECK"), sx, py + 118, 12, WHITE);
     ui_text("BEST FINISH", sx, py + 144, 8, DIM);
     if (sv.best_place[id]) sprintf(buf, "%d%s", sv.best_place[id], sv.best_place[id] == 1 ? "ST" : (sv.best_place[id] == 2 ? "ND" : (sv.best_place[id] == 3 ? "RD" : "TH")));
     else strcpy(buf, "-");
@@ -400,10 +472,10 @@ static void car_stats_norm(const uint8_t *lv, float *o)
 {
     CarStats s;
     car_stats_from_levels(lv, &s);
-    o[0] = 0.25f + 0.75f * (s.vmax - 36.0f) / 14.5f;
-    o[1] = 0.25f + 0.75f * (s.accel - 12.5f) / 8.5f;
-    o[2] = 0.25f + 0.75f * (s.grip - 15.0f) / 6.25f;
-    o[3] = 0.25f + 0.75f * ((s.tank - 2.0f) / 3.0f * 0.5f + s.npow / 5.0f * 0.5f);
+    o[0] = 0.25f + 0.75f * (s.vmax - 38.0f) / 15.0f;
+    o[1] = 0.25f + 0.75f * (s.accel - 13.0f) / 9.0f;
+    o[2] = 0.25f + 0.75f * (s.grip - 15.5f) / 6.25f;
+    o[3] = 0.25f + 0.75f * ((7.0f - s.recharge) / 4.5f * 0.5f + s.npow / 5.0f * 0.5f);
     o[4] = 0.25f + 0.75f * (s.drift - 1.0f) / 1.1f;
 }
 
@@ -435,7 +507,7 @@ static void garage_render(void)
     }
     r3d_mode(RM_ALPHA);
     r3d_blob(0, 0.02f, 0, 2.0f, 3.0f, yaw, 0x000000A0u, 0x00000000u);
-    car_draw_showroom(body, PAINT[sv.paint], PAINT[sv.paint2], sv.livery, 0, 0.0f, 0, yaw, g.t);
+    car_draw_showroom(body, PAINT[sv.paint], PAINT[sv.paint2], body == BODY_FUTURE88 ? LIVERY_SIGNATURE : sv.livery, 0, 0.0f, 0, yaw, g.t);
     r3d_mode(RM_ADD);
     r3d_glow(0, 0.05f, 0, 5.0f, 0x3A8AFF30u);
 
@@ -482,16 +554,29 @@ static void garage_render(void)
         for (int i = 0; i < NUM_BODIES; i++) {
             int sel = g.cursor == i, own = (sv.owned_body >> i) & 1;
             float y = 104 + (float)i * 56;
-            ui_slant(40, y, 360, 48, 8, sel ? 0xFFD23AF0u : 0x0C1020D8u);
-            ui_text(BODY_NAME[i], 58, y + 10, 14, sel ? DARKTXT : WHITE);
-            if (own) ui_text(sv.body == i ? "DRIVING" : "OWNED", 58, y + 31, 8, sel ? 0x3A3A44FFu : 0x5AF27AFFu);
+            if (i == BODY_FUTURE88 && !sv.secret) {
+                ui_slant(40, y, 360, 48, 8, 0x0C102080u);
+                ui_text("? ? ?", 58, y + 10, 14, 0x4A5268FFu);
+                ui_text("HIDDEN CRAFT", 58, y + 31, 8, 0x4A5268FFu);
+                continue;
+            }
+            uint32_t bg = sel ? 0xFFD23AF0u : (i == BODY_FUTURE88 ? 0x0A2A5AE0u : 0x0C1020D8u);
+            ui_slant(40, y, 360, 48, 8, bg);
+            ui_text(BODY_NAME[i], 58, y + 10, 14, sel ? DARKTXT : (i == BODY_FUTURE88 ? 0xBFEFFFFFu : WHITE));
+            if (own) ui_text(sv.body == i ? "PILOTING" : (i == BODY_FUTURE88 ? "SECRET CRAFT" : "OWNED"), 58, y + 31, 8, sel ? 0x3A3A44FFu : 0x5AF27AFFu);
             else { sprintf(buf, "%d CR", BODY_PRICE[i]); ui_text_r(buf, 388, y + 17, 12, sel ? DARKTXT : (sv.credits >= BODY_PRICE[i] ? YELLOW : 0xFF6A5AFFu)); }
         }
-        ui_text("CARS CHANGE YOUR LOOK - SPEED COMES FROM UPGRADES", 44, 340, 9, CYAN);
-        if (!((sv.owned_body >> g.cursor) & 1)) ui_text("A  BUY THIS CAR", 44, 358, 10, YELLOW);
+        ui_text("CRAFT CHANGE YOUR LOOK - SPEED COMES FROM UPGRADES", 44, 340, 9, CYAN);
+        if (!((sv.owned_body >> g.cursor) & 1)) ui_text("A  BUY THIS CRAFT", 44, 358, 10, YELLOW);
         if (g.confirm > 0) ui_text("NOT ENOUGH CREDITS - WIN RACES TO EARN MORE", 44, 376, 9, 0xFF6A5AFFu);
     } else {
         const char *rows[3] = { "MAIN COLOR", "ACCENT COLOR", "LIVERY" };
+        if (sv.body == BODY_FUTURE88) {
+            ui_slant(40, 104, 360, 92, 8, 0x0A2A5AE0u);
+            ui_text("SIGNATURE FINISH", 58, 116, 10, DIM);
+            ui_text("LIQUID SILVER + NEON BLUE", 58, 138, 16, 0xBFEFFFFFu);
+            ui_text("FUTURE 88 ALWAYS WEARS ITS OWN COLOURS", 58, 168, 9, CYAN);
+        } else
         for (int i = 0; i < 3; i++) {
             int sel = g.cursor == i;
             float y = 104 + (float)i * 60;
@@ -510,7 +595,7 @@ static void garage_render(void)
     /* stats */
     float sx = VW - 250, sy = 322;
     ui_slant(sx - 16, sy - 12, 240, 150, 8, 0x0C1020C8u);
-    const char *sn[5] = { "TOP SPEED", "ACCELERATION", "HANDLING", "NITRO", "DRIFT" };
+    const char *sn[5] = { "TOP SPEED", "ACCELERATION", "HANDLING", "BOOST", "DRIFT" };
     for (int i = 0; i < 5; i++) stat_bar(sx, sy + (float)i * 27, 200, sn[i], st[i], nx[i]);
     ui_text_r(BODY_NAME[body], VW - 30, 104, 16, WHITE);
     hint("L / R  TAB      A  BUY / SELECT      Y  RACE      B  BACK");
@@ -545,9 +630,9 @@ static void help_render(void)
     ui_text_weight(1.6f);
     ui_text_s("HOW TO PLAY", 40, 22, 26, WHITE);
     ui_text_weight(1.0f);
-    const char *keys[9] = { "R / ZR", "L / ZL", "L + STEER", "LEFT STICK", "A", "B", "X", "Y", "+ / -" };
-    const char *what[9] = { "ACCELERATE", "BRAKE / REVERSE", "DRIFT - HOLD THROUGH THE CORNER", "STEER (OR D-PAD)", "NITRO BOOST",
-                            "HOP (HOP + L STARTS A DRIFT)", "CHANGE CAMERA", "HORN", "PAUSE / RESET CAR" };
+    const char *keys[9] = { "A", "R / ZR", "L / ZL", "L + STEER", "LEFT STICK", "B", "X", "Y", "+ / -" };
+    const char *what[9] = { "ACCELERATE", "BOOST - UNLIMITED, RECHARGES AFTER EVERY USE", "BRAKE / REVERSE", "DRIFT - HOLD THROUGH THE CORNER",
+                            "STEER (OR D-PAD)", "HOP (HOP + L STARTS A DRIFT)", "CHANGE CAMERA", "HORN", "PAUSE / RESET CRAFT" };
     for (int i = 0; i < 9; i++) {
         float y = 76 + (float)i * 30;
         ui_slant(40, y, 150, 24, 6, 0xFFD23AE0u);
@@ -555,10 +640,10 @@ static void help_render(void)
         ui_text(what[i], 210, y + 7, 11, WHITE);
     }
     float y = 76 + 9 * 30 + 6;
-    ui_text("DRIFTS CHARGE UP: BLUE, ORANGE, PURPLE SPARKS. LET GO OF L FOR A MINI-TURBO", 40, y, 9, CYAN);
-    ui_text("AND A REFILL OF NITRO. SLIPSTREAM BEHIND RIVALS TO TOP UP YOUR TANKS TOO.", 40, y + 16, 9, CYAN);
-    ui_text("TAP THE THROTTLE RIGHT ON GO FOR A ROCKET START. FINISH TOP 3 TO UNLOCK THE NEXT TRACK,", 40, y + 40, 9, YELLOW);
-    ui_text("AND SPEND YOUR WINNINGS IN THE GARAGE - THE LATER TRACKS NEED A FASTER CAR.", 40, y + 56, 9, YELLOW);
+    ui_text("DRIFTS CHARGE UP: BLUE, ORANGE, PURPLE SPARKS. LET GO OF L FOR A MINI-TURBO.", 40, y, 9, CYAN);
+    ui_text("DRIFTING AND SLIPSTREAMING BEHIND RIVALS BOTH SPEED UP THE BOOST RECHARGE.", 40, y + 16, 9, CYAN);
+    ui_text("PRESS A JUST BEFORE GO FOR A ROCKET START. FINISH TOP 3 TO UNLOCK THE NEXT TRACK,", 40, y + 40, 9, YELLOW);
+    ui_text("AND SPEND YOUR WINNINGS IN THE GARAGE - THE LATER TRACKS NEED A FASTER CRAFT.", 40, y + 56, 9, YELLOW);
     hint("A / B  BACK");
 }
 
@@ -574,9 +659,9 @@ static void loading_render(void)
     ui_text("LOADING...", 62, 380, 12, DIM);
     const char *tips[5] = { "HOLD L THROUGH A CORNER TO DRIFT - LET GO FOR A MINI-TURBO",
                             "PURPLE SPARKS MEAN THE BIGGEST DRIFT BOOST",
-                            "TUCK IN BEHIND A RIVAL TO SLIPSTREAM AND REFILL NITRO",
+                            "BOOST WITH R - IT NEVER RUNS OUT, BUT WAIT FOR THE RECHARGE",
                             "HOP WITH B, THEN HOLD L TO START A DRIFT AT LOWER SPEED",
-                            "STUCK? PRESS - TO PUT YOUR CAR BACK ON THE TRACK" };
+                            "HIT 88 MPH AND HOLD ON TIGHT..." };
     ui_text(tips[(sv.races + g.loading_track) % 5], 62, 410, 9, CYAN);
 }
 
@@ -648,7 +733,7 @@ void menu_render(void)
     race_render();
     ui_begin(RM_ALPHA);
     switch (g.state) {
-    case ST_TITLE: title_render(); break;
+    case ST_TITLE: title_render(); if (g.unlock_t > 0) unlock_render(); break;
     case ST_TRACKS: tracks_render(); break;
     case ST_OPTIONS: options_render(); break;
     case ST_HELP: help_render(); break;

@@ -10,7 +10,10 @@
 #include "fx.h"
 #include "util.h"
 
-#define SAVE_MAGIC 0x524C4731u   /* "RLG1" */
+#define SAVE_MAGIC 0x524C4732u   /* "RLG2" */
+#define SAVE_MAGIC_V1 0x524C4731u
+/* the speed readout: game metres per second -> the mph shown (the world is drawn at toy scale, so speeds read high) */
+#define MPS_TO_MPH 2.796f
 
 typedef struct {
     uint32_t magic;
@@ -26,7 +29,8 @@ typedef struct {
     int32_t  best_drift;
     uint8_t  owned_body;               /* bit mask of bodies bought */
     uint8_t  seen_help;
-    uint8_t  pad[2];
+    uint8_t  secret;                   /* FUTURE 88 unlocked by the code */
+    uint8_t  pad[1];
 } Save;
 
 extern Save sv;
@@ -44,6 +48,8 @@ typedef struct {
     int quit;
     /* menus */
     int cursor, sub, tab, confirm;
+    int code_pos;          /* progress through the secret code */
+    float unlock_t;        /* the FUTURE 88 unlock card (> 0 while showing) */
     int track_sel;
     float menu_anim;
     /* race */
@@ -53,6 +59,7 @@ typedef struct {
     int paused, pause_sel;
     int final_lap_shown;
     int count_last;
+    float thr_press_t;
     int order[MAX_CARS];
     /* camera */
     float cx, cy, cz, cyaw, cdist, cheight, cfov, shake, look_x, look_z;
@@ -63,6 +70,9 @@ typedef struct {
     /* popups */
     Popup pop[MAX_POPUPS];
     float nitro_flash, tier_flash; int tier_col;
+    float boost_anim;      /* 1 -> 0 after each boost */
+    float mph88_t;         /* > 0 while the 88 mph animation plays */
+    int armed88; float since88;
     float wrong_t;
     /* audio */
     float eng_vol;

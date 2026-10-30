@@ -1,9 +1,9 @@
 /*
  * RACING LEGENDS - synthesized racing sounds (no music, no audio files).
  *
- * Every sound in game.h's SND_* list is generated at start-up: engines from firing pulses through exhaust
- * resonances, tyres from resonant noise with a wobbling squeal, nitro from roaring jets of noise, impacts
- * from thumps and inharmonic metal. Loops are seamless so the platform can play them forever and change
+ * Every sound in game.h's SND_* list is generated at start-up: hover turbines (a hum, a turbine whine, the
+ * blade-pass tone, rushing air and the mag field's buzz), the drift's electric sizzle, the boost's jet roar, the
+ * 88 mph sonic boom, impacts from thumps and inharmonic metal. Loops are seamless so the platform can play them forever and change
  * only their pitch and volume. Samples are 16-bit signed mono at AUDIO_RATE in the host's byte order.
  */
 #ifndef AUDIO_H

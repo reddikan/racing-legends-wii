@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 mkdir -p tools/out/reel
 cc -O2 -g -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers \
    source/r3d.c source/ui.c source/track.c source/scenery.c source/car.c source/fx.c source/race.c \
-   source/hud.c source/menu.c source/game.c source/audio.c tools/swr.c tools/test.c -lm -o tools/out/gtest
+   source/hud.c source/menu.c source/game.c source/audio.c source/font_bebas.c tools/swr.c tools/test.c -lm -o tools/out/gtest
 tools/out/gtest tools/out ${1:-shots} $2
 python3 -c "
 import glob, os

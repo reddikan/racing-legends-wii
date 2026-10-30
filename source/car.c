@@ -16,7 +16,7 @@
 Car cars[MAX_CARS];
 int ncars;
 
-const char *BODY_NAME[NUM_BODIES] = { "HORNET RS", "THUNDER V8", "BAJA BUGGY", "APEX GT" };
+const char *BODY_NAME[NUM_BODIES] = { "COMET", "VIPER", "TITAN", "FUTURE 88" };
 const uint32_t PAINT[NUM_PAINTS] = {
     0x1E5ADCFFu, 0xE8302AFFu, 0xF2C42AFFu, 0x22A85AFFu, 0xF4F4F2FFu, 0x26262CFFu,
     0xF2782AFFu, 0x8A3AD8FFu, 0x2AC8E0FFu, 0xF25AA8FFu, 0x9AA2AEFFu, 0x6A2A1EFFu,
@@ -26,20 +26,20 @@ const char *PAINT_NAME[NUM_PAINTS] = { "RALLY BLUE", "RACING RED", "SUNBURST", "
 
 void car_stats_from_levels(const uint8_t *lv, CarStats *st)
 {
-    st->vmax  = 36.0f + 2.9f * (float)lv[UP_ENGINE];
-    st->accel = 12.5f + 1.7f * (float)lv[UP_TURBO];
-    st->grip  = 15.0f + 1.25f * (float)lv[UP_TIRES];
-    st->tank  = 2.0f + (float)(lv[UP_TANK] > 3 ? 3 : lv[UP_TANK]);
-    st->npow  = (float)lv[UP_NITRO];
+    st->vmax     = 38.0f + 3.0f * (float)lv[UP_ENGINE];       /* 106 .. 148 mph */
+    st->accel    = 13.0f + 1.8f * (float)lv[UP_TURBO];
+    st->grip     = 15.5f + 1.25f * (float)lv[UP_GRIP];
+    st->recharge = 7.0f - 0.9f * (float)lv[UP_RECHARGE];       /* 7.0 .. 2.5 s */
+    st->npow     = (float)lv[UP_BOOST];
     st->drift = 1.0f + 0.22f * (float)lv[UP_DRIFT];
 }
 
 /* ------------------------------------------------------------------ */
 /* models                                                              */
 /* ------------------------------------------------------------------ */
-enum { M_PAINT, M_PAINT_LO, M_PAINT_ROOF, M_STRIPE, M_GLASS, M_DARK, M_CHROME, M_HEAD, M_TAIL, M_TIRE, M_RIM, M_SEAT, M_HELMET, M_AMBER };
+enum { M_PAINT, M_PAINT_LO, M_PAINT_ROOF, M_STRIPE, M_GLASS, M_DARK, M_CHROME, M_HEAD, M_TAIL, M_TIRE, M_RIM, M_SEAT, M_HELMET, M_AMBER, M_THRUST };
 
-typedef struct { float p[3][3]; float n[3]; uint8_t m; } MTri;
+typedef struct { float p[3][3]; float n[3]; float vn[3][3]; uint8_t m; } MTri;
 #define MAX_MTRI 420
 typedef struct { MTri t[MAX_MTRI]; int n; float wx, wz, wy, wr, ww; float len, wid, hgt; float hx, hy, hz, tx, ty; } Model;
 static Model models[NUM_BODIES];
@@ -73,13 +73,23 @@ static void mquad(const float *a, const float *b, const float *c, const float *d
  * mats: top, front (+z), back (-z), sides */
 static void fbox(float wb, float yb, float zb0, float zb1, float wt, float yt, float zt0, float zt1, int mtop, int mfront, int mback, int mside)
 {
-    float B[4][3] = { { -wb, yb, zb0 }, { wb, yb, zb0 }, { wb, yb, zb1 }, { -wb, yb, zb1 } };
-    float T[4][3] = { { -wt, yt, zt0 }, { wt, yt, zt0 }, { wt, yt, zt1 }, { -wt, yt, zt1 } };
+    /* the cross-section is an octagon: rounded corners seen from above */
+    float cb = fminf(0.32f, 0.2f * fminf(wb * 2.0f, zb1 - zb0)), ct = fminf(0.32f, 0.2f * fminf(wt * 2.0f, zt1 - zt0));
+    float B[8][3] = { { -wb + cb, yb, zb0 }, { wb - cb, yb, zb0 }, { wb, yb, zb0 + cb }, { wb, yb, zb1 - cb },
+                      { wb - cb, yb, zb1 }, { -wb + cb, yb, zb1 }, { -wb, yb, zb1 - cb }, { -wb, yb, zb0 + cb } };
+    float T[8][3] = { { -wt + ct, yt, zt0 }, { wt - ct, yt, zt0 }, { wt, yt, zt0 + ct }, { wt, yt, zt1 - ct },
+                      { wt - ct, yt, zt1 }, { -wt + ct, yt, zt1 }, { -wt, yt, zt1 - ct }, { -wt, yt, zt0 + ct } };
     float c[3] = { 0, (yb + yt) * 0.5f, (zb0 + zb1 + zt0 + zt1) * 0.25f };
-    if (mtop >= 0) mquad(T[0], T[1], T[2], T[3], mtop, c);
-    if (mfront >= 0) mquad(B[3], B[2], T[2], T[3], mfront, c);
-    if (mback >= 0) mquad(B[0], B[1], T[1], T[0], mback, c);
-    if (mside >= 0) { mquad(B[1], B[2], T[2], T[1], mside, c); mquad(B[0], B[3], T[3], T[0], mside, c); }
+    if (mtop >= 0) {
+        float tc[3] = { 0, yt, (zt0 + zt1) * 0.5f };
+        for (int i = 0; i < 8; i++) mtri(tc, T[i], T[(i + 1) & 7], mtop, c);
+    }
+    for (int i = 0; i < 8; i++) {
+        int j = (i + 1) & 7;
+        int m = i == 4 ? mfront : (i == 0 ? mback : mside);
+        if (m < 0) continue;
+        mquad(B[i], B[j], T[j], T[i], m, c);
+    }
 }
 
 /* plain box centred at (x, y0..y1, z) */
@@ -112,130 +122,180 @@ static void stripes(float y, float z0, float z1, float wsl)
     }
 }
 
-static void build_hornet(void)
+static int mat_group(int m) { return (m == M_PAINT || m == M_PAINT_LO || m == M_PAINT_ROOF) ? 0 : m + 1; }
+
+/* smoothing: each vertex takes the average normal of the faces that share it (within ~55 degrees) */
+static void smooth_normals(Model *M)
 {
-    Model *m = cur;
-    fbox(1.16f, 0.36f, -2.25f, 2.25f, 1.25f, 0.92f, -2.38f, 2.32f, -1, M_PAINT_LO, M_PAINT_LO, M_PAINT_LO);
-    fbox(1.25f, 0.92f, -2.38f, 2.32f, 1.12f, 1.12f, -2.22f, 2.05f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
-    fbox(1.08f, 1.12f, -2.0f, 0.7f, 0.86f, 1.86f, -1.92f, -0.2f, M_PAINT_ROOF, M_GLASS, M_GLASS, M_GLASS);
-    stripes(1.125f, 0.75f, 2.05f, 0.2f);
-    stripes(1.865f, -1.92f, -0.2f, 0.2f);
-    /* roof spoiler and rally light pod */
-    fbox(0.9f, 1.86f, -2.05f, -1.75f, 0.92f, 1.98f, -2.15f, -1.85f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(0, 1.12f, 1.24f, 1.85f, 0.7f, 0.12f, M_DARK, M_DARK);
-    for (int i = -1; i <= 1; i += 2) for (int k = 0; k < 2; k++) {
-        float x = (float)i * (0.18f + 0.34f * (float)k);
-        panel(x - 0.13f, 1.0f, 2.0f, x + 0.13f, 1.0f, 2.0f, x + 0.13f, 1.22f, 1.98f, x - 0.13f, 1.22f, 1.98f, M_AMBER);
-    }
-    /* bumpers */
-    mbox(0, 0.32f, 0.6f, 2.36f, 1.2f, 0.12f, M_DARK, M_DARK);
-    mbox(0, 0.32f, 0.6f, -2.42f, 1.2f, 0.1f, M_DARK, M_DARK);
-    /* lights */
-    for (int s = -1; s <= 1; s += 2) {
-        float x0 = (float)s * 0.62f, x1 = (float)s * 1.05f;
-        panel(x0, 0.7f, 2.33f, x1, 0.7f, 2.33f, x1, 0.88f, 2.31f, x0, 0.88f, 2.31f, M_HEAD);
-        panel(x0, 0.7f, -2.39f, x1, 0.7f, -2.39f, x1, 0.86f, -2.39f, x0, 0.86f, -2.39f, M_TAIL);
-    }
-    m->wx = 1.1f; m->wz = 1.55f; m->wy = 0.48f; m->wr = 0.48f; m->ww = 0.4f;
-    m->len = 4.8f; m->wid = 2.5f; m->hgt = 1.9f;
-    m->hx = 0.84f; m->hy = 0.8f; m->hz = 2.36f; m->tx = 0.84f; m->ty = 0.78f;
+    for (int i = 0; i < M->n; i++)
+        for (int k = 0; k < 3; k++) {
+            MTri *t = &M->t[i];
+            float ax = 0, ay = 0, az = 0;
+            for (int j = 0; j < M->n; j++) {
+                const MTri *u = &M->t[j];
+                if (mat_group(u->m) != mat_group(t->m)) continue;
+                float d = t->n[0] * u->n[0] + t->n[1] * u->n[1] + t->n[2] * u->n[2];
+                if (d < 0.35f) continue;
+                for (int q = 0; q < 3; q++) {
+                    float dx = u->p[q][0] - t->p[k][0], dy = u->p[q][1] - t->p[k][1], dz = u->p[q][2] - t->p[k][2];
+                    if (dx * dx + dy * dy + dz * dz < 1e-4f) { ax += u->n[0]; ay += u->n[1]; az += u->n[2]; break; }
+                }
+            }
+            float l = sqrtf(ax * ax + ay * ay + az * az);
+            if (l < 1e-6f) { ax = t->n[0]; ay = t->n[1]; az = t->n[2]; l = 1; }
+            t->vn[k][0] = ax / l; t->vn[k][1] = ay / l; t->vn[k][2] = az / l;
+        }
 }
 
-static void build_thunder(void)
+/* fbox shifted sideways (side pods, wings, fins) */
+static void fbox_at(float cx, float wb, float yb, float zb0, float zb1, float wt, float yt, float zt0, float zt1, int mt, int mf, int mb, int ms)
 {
-    Model *m = cur;
-    fbox(1.2f, 0.34f, -2.55f, 2.55f, 1.3f, 0.88f, -2.62f, 2.62f, -1, M_PAINT_LO, M_PAINT_LO, M_PAINT_LO);
-    fbox(1.3f, 0.88f, -2.62f, 2.62f, 1.2f, 1.05f, -2.5f, 2.45f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
-    fbox(1.12f, 1.05f, -1.65f, 0.55f, 0.9f, 1.6f, -1.25f, -0.15f, M_PAINT_ROOF, M_GLASS, M_GLASS, M_GLASS);
-    stripes(1.055f, 0.6f, 2.45f, 0.24f);
-    stripes(1.605f, -1.25f, -0.15f, 0.24f);
-    stripes(1.055f, -2.5f, -1.7f, 0.24f);
-    /* hood scoop and ducktail */
-    fbox(0.42f, 1.05f, 0.9f, 1.9f, 0.32f, 1.25f, 1.05f, 1.75f, M_DARK, M_DARK, M_DARK, M_DARK);
-    fbox(1.15f, 1.05f, -2.55f, -2.2f, 1.18f, 1.22f, -2.62f, -2.3f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(0, 0.3f, 0.55f, 2.66f, 1.25f, 0.1f, M_CHROME, M_CHROME);
-    mbox(0, 0.3f, 0.55f, -2.68f, 1.25f, 0.1f, M_CHROME, M_CHROME);
-    panel(-0.55f, 0.6f, 2.63f, 0.55f, 0.6f, 2.63f, 0.55f, 0.82f, 2.62f, -0.55f, 0.82f, 2.62f, M_DARK);
-    for (int s = -1; s <= 1; s += 2) {
-        float x0 = (float)s * 0.7f, x1 = (float)s * 1.1f;
-        panel(x0, 0.62f, 2.63f, x1, 0.62f, 2.63f, x1, 0.82f, 2.62f, x0, 0.82f, 2.62f, M_HEAD);
-        panel(x0, 0.68f, -2.63f, x1, 0.68f, -2.63f, x1, 0.84f, -2.63f, x0, 0.84f, -2.63f, M_TAIL);
-    }
-    m->wx = 1.14f; m->wz = 1.7f; m->wy = 0.52f; m->wr = 0.52f; m->ww = 0.46f;
-    m->len = 5.3f; m->wid = 2.6f; m->hgt = 1.6f;
-    m->hx = 0.9f; m->hy = 0.72f; m->hz = 2.64f; m->tx = 0.9f; m->ty = 0.76f;
+    int n0 = cur->n;
+    fbox(wb, yb, zb0, zb1, wt, yt, zt0, zt1, mt, mf, mb, ms);
+    for (int i = n0; i < cur->n; i++) for (int k = 0; k < 3; k++) cur->t[i].p[k][0] += cx;
 }
 
-static void build_baja(void)
+static void thruster(float x, float y, float z, float r)
 {
-    Model *m = cur;
-    /* tub and nose */
-    fbox(0.88f, 0.55f, -1.85f, 1.7f, 0.98f, 0.98f, -1.95f, 1.75f, -1, M_PAINT_LO, M_PAINT_LO, M_PAINT_LO);
-    fbox(0.98f, 0.98f, -1.95f, 1.75f, 0.9f, 1.08f, -1.85f, 1.6f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
-    fbox(0.8f, 0.55f, 1.7f, 2.45f, 0.68f, 0.92f, 1.6f, 2.25f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
-    stripes(1.085f, 0.4f, 1.6f, 0.18f);
-    /* cockpit: seats and the driver's helmet */
-    mbox(0, 1.08f, 1.25f, -0.4f, 0.75f, 0.75f, M_SEAT, M_SEAT);
-    fbox(0.26f, 1.25f, -0.62f, -0.18f, 0.22f, 1.75f, -0.6f, -0.2f, M_HELMET, M_HELMET, M_HELMET, M_HELMET);
-    /* roll cage */
-    float px[4] = { -0.85f, 0.85f, -0.85f, 0.85f }, pz[4] = { 0.35f, 0.35f, -1.25f, -1.25f };
-    for (int i = 0; i < 4; i++) mbox(px[i], 1.0f, 2.05f, pz[i], 0.07f, 0.07f, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(0, 2.0f, 2.12f, 0.35f, 0.92f, 0.07f, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(0, 2.0f, 2.12f, -1.25f, 0.92f, 0.07f, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(-0.85f, 2.0f, 2.12f, -0.45f, 0.07f, 0.85f, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(0.85f, 2.0f, 2.12f, -0.45f, 0.07f, 0.85f, M_PAINT_ROOF, M_PAINT_ROOF);
-    /* engine and spare wheel at the back */
-    mbox(0, 0.9f, 1.4f, -2.2f, 0.6f, 0.45f, M_DARK, M_DARK);
-    fbox(0.5f, 1.15f, -2.6f, -2.0f, 0.5f, 1.45f, -2.6f, -2.0f, M_TIRE, M_TIRE, M_TIRE, M_TIRE);
-    mbox(0, 1.45f, 1.5f, -2.3f, 0.28f, 0.2f, M_RIM, M_RIM);
-    /* light bar on the cage */
-    for (int i = -2; i <= 2; i++) panel((float)i * 0.32f - 0.12f, 2.12f, 0.43f, (float)i * 0.32f + 0.12f, 2.12f, 0.43f,
-                                         (float)i * 0.32f + 0.12f, 2.3f, 0.43f, (float)i * 0.32f - 0.12f, 2.3f, 0.43f, M_AMBER);
-    for (int s = -1; s <= 1; s += 2) {
-        float x0 = (float)s * 0.3f, x1 = (float)s * 0.62f;
-        panel(x0, 0.68f, 2.46f, x1, 0.68f, 2.46f, x1, 0.84f, 2.42f, x0, 0.84f, 2.42f, M_HEAD);
-        panel(x0, 0.75f, -1.96f, x1, 0.75f, -1.96f, x1, 0.9f, -1.96f, x0, 0.9f, -1.96f, M_TAIL);
-    }
-    m->wx = 1.28f; m->wz = 1.45f; m->wy = 0.62f; m->wr = 0.62f; m->ww = 0.55f;
-    m->len = 5.0f; m->wid = 2.9f; m->hgt = 2.3f;
-    m->hx = 0.46f; m->hy = 0.76f; m->hz = 2.45f; m->tx = 0.46f; m->ty = 0.82f;
+    mbox(x, y - r, y + r, z + 0.15f, r, 0.18f, M_DARK, M_DARK);
+    panel(x - r * 0.75f, y - r * 0.75f, z - 0.04f, x + r * 0.75f, y - r * 0.75f, z - 0.04f, x + r * 0.75f, y + r * 0.75f, z - 0.04f, x - r * 0.75f, y + r * 0.75f, z - 0.04f, M_THRUST);
 }
 
-static void build_apex(void)
+static void build_comet(void)
 {
     Model *m = cur;
-    fbox(1.2f, 0.3f, -2.45f, 2.5f, 1.32f, 0.76f, -2.52f, 2.58f, -1, M_PAINT_LO, M_PAINT_LO, M_PAINT_LO);
-    fbox(1.32f, 0.76f, -2.52f, 2.58f, 1.16f, 0.94f, -2.36f, 2.3f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
-    fbox(1.02f, 0.94f, -1.45f, 0.75f, 0.76f, 1.42f, -1.0f, -0.05f, M_PAINT_ROOF, M_GLASS, M_GLASS, M_GLASS);
-    stripes(0.945f, 0.8f, 2.3f, 0.2f);
-    stripes(1.425f, -1.0f, -0.05f, 0.2f);
-    stripes(0.945f, -2.36f, -1.5f, 0.2f);
-    /* side intakes */
+    fbox(0.9f, 0.25f, -2.2f, 1.2f, 0.75f, 0.62f, -2.0f, 0.9f, M_PAINT, M_PAINT, M_PAINT, M_PAINT_LO);
+    fbox(0.75f, 0.25f, 1.2f, 3.0f, 0.3f, 0.5f, 0.9f, 2.8f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
+    fbox(0.42f, 0.62f, -0.8f, 0.9f, 0.2f, 1.02f, -0.45f, 0.4f, M_GLASS, M_GLASS, M_GLASS, M_GLASS);
+    stripes(0.63f, -2.0f, -0.85f, 0.14f);
     for (int s = -1; s <= 1; s += 2) {
-        float x = (float)s * 1.29f;
-        panel(x, 0.45f, -0.9f, x, 0.45f, 0.1f, x, 0.7f, 0.0f, x, 0.7f, -0.8f, M_DARK);
+        fbox_at((float)s * 1.3f, 0.36f, 0.18f, -2.3f, 0.5f, 0.26f, 0.64f, -2.1f, 0.2f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
+        thruster((float)s * 1.3f, 0.42f, -2.32f, 0.2f);
+        panel((float)s * 0.55f, 0.36f, 2.38f, (float)s * 0.72f, 0.36f, 2.1f, (float)s * 0.72f, 0.46f, 2.08f, (float)s * 0.55f, 0.46f, 2.36f, M_HEAD);
     }
-    /* rear wing */
-    mbox(-0.7f, 0.94f, 1.38f, -2.15f, 0.06f, 0.1f, M_DARK, M_DARK);
-    mbox(0.7f, 0.94f, 1.38f, -2.15f, 0.06f, 0.1f, M_DARK, M_DARK);
-    fbox(1.3f, 1.36f, -2.45f, -1.95f, 1.3f, 1.46f, -2.5f, -2.05f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
-    mbox(-1.3f, 1.25f, 1.55f, -2.25f, 0.04f, 0.3f, M_DARK, M_DARK);
-    mbox(1.3f, 1.25f, 1.55f, -2.25f, 0.04f, 0.3f, M_DARK, M_DARK);
-    mbox(0, 0.26f, 0.48f, 2.55f, 1.25f, 0.1f, M_DARK, M_DARK);
+    mbox(0, 0.36f, 0.48f, -1.1f, 1.2f, 0.45f, M_PAINT_LO, M_PAINT_LO);
+    fbox(0.07f, 0.62f, -2.05f, -1.25f, 0.05f, 1.4f, -2.15f, -1.75f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
+    thruster(-0.42f, 0.42f, -2.22f, 0.24f);
+    thruster(0.42f, 0.42f, -2.22f, 0.24f);
+    m->len = 5.4f; m->wid = 3.0f; m->hgt = 1.4f;
+    m->hx = 0.64f; m->hy = 0.4f; m->hz = 2.3f; m->tx = 0.42f; m->ty = 0.42f;
+}
+
+static void build_viper(void)
+{
+    Model *m = cur;
+    fbox(0.62f, 0.25f, -2.4f, 0.5f, 0.5f, 0.62f, -2.2f, 0.3f, M_PAINT, M_PAINT, M_PAINT, M_PAINT_LO);
+    fbox(0.55f, 0.25f, 0.5f, 3.5f, 0.16f, 0.44f, 0.3f, 3.3f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
+    fbox(0.34f, 0.62f, -0.9f, 0.5f, 0.18f, 0.98f, -0.6f, 0.15f, M_GLASS, M_GLASS, M_GLASS, M_GLASS);
+    stripes(0.45f, 0.6f, 3.0f, 0.08f);
+    fbox(1.75f, 0.32f, -2.45f, -0.9f, 1.6f, 0.44f, -2.35f, -1.35f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
     for (int s = -1; s <= 1; s += 2) {
-        float x0 = (float)s * 0.6f, x1 = (float)s * 1.1f;
-        panel(x0, 0.62f, 2.56f, x1, 0.62f, 2.56f, x1, 0.74f, 2.5f, x0, 0.74f, 2.5f, M_HEAD);
-        panel(x0, 0.6f, -2.53f, x1, 0.6f, -2.53f, x1, 0.72f, -2.53f, x0, 0.72f, -2.53f, M_TAIL);
+        fbox_at((float)s * 1.68f, 0.08f, 0.44f, -2.4f, -1.3f, 0.06f, 1.15f, -2.45f, -1.9f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
+        panel((float)s * 0.3f, 0.32f, 2.6f, (float)s * 0.45f, 0.32f, 2.0f, (float)s * 0.45f, 0.4f, 1.98f, (float)s * 0.3f, 0.4f, 2.58f, M_HEAD);
     }
-    m->wx = 1.14f; m->wz = 1.6f; m->wy = 0.48f; m->wr = 0.48f; m->ww = 0.44f;
-    m->len = 5.1f; m->wid = 2.64f; m->hgt = 1.5f;
-    m->hx = 0.85f; m->hy = 0.68f; m->hz = 2.56f; m->tx = 0.85f; m->ty = 0.66f;
+    thruster(0, 0.44f, -2.42f, 0.36f);
+    m->len = 5.9f; m->wid = 3.5f; m->hgt = 1.2f;
+    m->hx = 0.38f; m->hy = 0.36f; m->hz = 2.4f; m->tx = 0.0f; m->ty = 0.44f;
+}
+
+static void build_titan(void)
+{
+    Model *m = cur;
+    fbox(1.25f, 0.25f, -2.4f, 2.2f, 1.15f, 0.9f, -2.25f, 1.9f, -1, M_PAINT_LO, M_PAINT_LO, M_PAINT_LO);
+    fbox(1.15f, 0.9f, -2.25f, 1.9f, 1.05f, 1.05f, -2.1f, 1.7f, M_PAINT, M_PAINT, M_PAINT, M_PAINT);
+    fbox(0.92f, 1.05f, -0.2f, 1.5f, 0.76f, 1.55f, 0.0f, 1.1f, M_PAINT_ROOF, M_GLASS, M_GLASS, M_GLASS);
+    stripes(1.06f, -2.0f, -0.4f, 0.22f);
+    mbox(0, 1.05f, 1.35f, -1.3f, 0.8f, 0.6f, M_DARK, M_DARK);
+    for (int s = -1; s <= 1; s += 2) {
+        thruster((float)s * 0.75f, 0.55f, -2.42f, 0.28f);
+        thruster((float)s * 0.3f, 0.75f, -2.42f, 0.2f);
+        panel((float)s * 0.5f, 0.6f, 2.21f, (float)s * 1.0f, 0.6f, 2.21f, (float)s * 1.0f, 0.8f, 2.18f, (float)s * 0.5f, 0.8f, 2.18f, M_HEAD);
+        fbox_at((float)s * 1.32f, 0.12f, 0.3f, -1.8f, 1.6f, 0.1f, 0.8f, -1.7f, 1.5f, M_DARK, M_DARK, M_DARK, M_DARK);
+    }
+    m->len = 4.9f; m->wid = 2.8f; m->hgt = 1.6f;
+    m->hx = 0.75f; m->hy = 0.7f; m->hz = 2.25f; m->tx = 0.75f; m->ty = 0.55f;
+}
+
+/* half-ellipsoid (a bubble canopy) centred at (0, y, z), radii rx, ry, rz */
+static void dome(float y, float z, float rx, float ry, float rz, int mat)
+{
+    const int NA = 12, NB = 4;
+    float c[3] = { 0, y, z };
+    for (int j = 0; j < NB; j++)
+        for (int i = 0; i < NA; i++) {
+            float b0 = (float)j / NB * 1.5707963f, b1 = (float)(j + 1) / NB * 1.5707963f;
+            float a0 = (float)i / NA * 6.2831853f, a1 = (float)(i + 1) / NA * 6.2831853f;
+            float p00[3] = { cosf(a0) * cosf(b0) * rx, y + sinf(b0) * ry, z + sinf(a0) * cosf(b0) * rz };
+            float p10[3] = { cosf(a1) * cosf(b0) * rx, y + sinf(b0) * ry, z + sinf(a1) * cosf(b0) * rz };
+            float p01[3] = { cosf(a0) * cosf(b1) * rx, y + sinf(b1) * ry, z + sinf(a0) * cosf(b1) * rz };
+            float p11[3] = { cosf(a1) * cosf(b1) * rx, y + sinf(b1) * ry, z + sinf(a1) * cosf(b1) * rz };
+            mtri(p00, p10, p11, mat, c);
+            if (j < NB - 1) mtri(p00, p11, p01, mat, c);
+        }
+}
+
+/* a ring (torus with a square section) facing backwards, centred at (0, y, z) */
+static void ring(float y, float z, float r, float t, int mat)
+{
+    const int N = 14;
+    float c[3] = { 0, y, z };
+    for (int i = 0; i < N; i++) {
+        float a0 = (float)i / N * 6.2831853f, a1 = (float)(i + 1) / N * 6.2831853f;
+        float ro0[3] = { cosf(a0) * (r + t), y + sinf(a0) * (r + t), z }, ro1[3] = { cosf(a1) * (r + t), y + sinf(a1) * (r + t), z };
+        float ri0[3] = { cosf(a0) * r, y + sinf(a0) * r, z }, ri1[3] = { cosf(a1) * r, y + sinf(a1) * r, z };
+        float bo0[3] = { ro0[0], ro0[1], z - t }, bo1[3] = { ro1[0], ro1[1], z - t }, bi0[3] = { ri0[0], ri0[1], z - t }, bi1[3] = { ri1[0], ri1[1], z - t };
+        mquad(ro0, ro1, bo1, bo0, mat, c);            /* outer */
+        mquad(ri0, bi0, bi1, ri1, mat, NULL);         /* inner */
+        mquad(bo0, bo1, bi1, bi0, mat, NULL);         /* back face */
+        mquad(ro0, ri0, ri1, ro1, mat, NULL);         /* front face */
+        /* the glowing field inside the ring */
+        float cc[3] = { 0, y, z - t * 0.5f }, q0[3] = { ri0[0], ri0[1], z - t * 0.5f }, q1[3] = { ri1[0], ri1[1], z - t * 0.5f };
+        mtri(cc, q1, q0, M_THRUST, NULL);
+    }
+}
+
+/* FUTURE 88: an original arrowhead hover craft - a long tapered silver hull, a bubble canopy, swept twin fins,
+ * side nacelles, and a ring thruster at the tail */
+static void build_future88(void)
+{
+    Model *m = cur;
+    /* hull: a broad tail section tapering into a long pointed nose */
+    fbox(1.05f, 0.25f, -2.1f, 0.4f, 0.95f, 0.72f, -1.95f, 0.3f, M_PAINT, M_PAINT, M_PAINT, M_PAINT_LO);
+    fbox(1.05f, 0.25f, 0.4f, 2.0f, 0.55f, 0.58f, 0.3f, 1.8f, M_PAINT, M_PAINT, M_PAINT, M_PAINT_LO);
+    fbox(0.55f, 0.25f, 2.0f, 3.1f, 0.12f, 0.42f, 1.8f, 3.0f, M_PAINT, M_PAINT, M_PAINT, M_PAINT_LO);
+    /* the cockpit bubble */
+    dome(0.72f, -0.15f, 0.6f, 0.5f, 1.15f, M_GLASS);
+    /* a glowing spine line down the nose */
+    panel(-0.05f, 0.585f, 0.35f, 0.05f, 0.585f, 0.35f, 0.05f, 0.43f, 2.95f, -0.05f, 0.43f, 2.95f, M_THRUST);
+    for (int s = -1; s <= 1; s += 2) {
+        float sx = (float)s;
+        /* side nacelles with blue intakes */
+        fbox_at(sx * 1.25f, 0.28f, 0.2f, -2.05f, 1.2f, 0.22f, 0.56f, -1.9f, 1.05f, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF, M_PAINT_ROOF);
+        panel(sx * 1.25f - 0.18f, 0.28f, 1.21f, sx * 1.25f + 0.18f, 0.28f, 1.21f, sx * 1.25f + 0.14f, 0.5f, 1.07f, sx * 1.25f - 0.14f, 0.5f, 1.07f, M_THRUST);
+        thruster(sx * 1.25f, 0.38f, -2.07f, 0.16f);
+        /* swept fins, leaning outwards */
+        float f0[3] = { sx * 0.5f, 0.7f, -1.15f }, f1[3] = { sx * 0.6f, 0.7f, -1.95f }, f2[3] = { sx * 0.98f, 1.5f, -2.25f }, f3[3] = { sx * 0.88f, 1.5f, -1.85f };
+        mquad(f0, f1, f2, f3, M_PAINT, NULL);
+        mquad(f3, f2, f1, f0, M_PAINT, NULL);
+        float g0[3] = { sx * 0.9f, 1.42f, -1.88f }, g1[3] = { sx * 0.97f, 1.44f, -2.2f }, g2[3] = { sx * 0.99f, 1.52f, -2.22f }, g3[3] = { sx * 0.92f, 1.5f, -1.88f };
+        mquad(g0, g1, g2, g3, M_THRUST, NULL);
+        mquad(g3, g2, g1, g0, M_THRUST, NULL);
+        /* a blue line along each flank, and slim headlights in the nose */
+        panel(sx * 1.052f, 0.4f, -1.9f, sx * 1.052f, 0.4f, 1.9f, sx * 1.052f, 0.46f, 1.9f, sx * 1.052f, 0.46f, -1.9f, M_THRUST);
+        panel(sx * 0.18f, 0.3f, 3.05f, sx * 0.42f, 0.3f, 2.5f, sx * 0.44f, 0.36f, 2.48f, sx * 0.2f, 0.38f, 3.03f, M_HEAD);
+    }
+    /* the ring thruster */
+    ring(0.62f, -2.05f, 0.42f, 0.14f, M_PAINT_ROOF);
+    /* slim tail lights under the ring */
+    panel(-0.7f, 0.3f, -2.11f, 0.7f, 0.3f, -2.11f, 0.7f, 0.36f, -2.11f, -0.7f, 0.36f, -2.11f, M_TAIL);
+    m->len = 5.3f; m->wid = 3.0f; m->hgt = 1.55f;
+    m->hx = 0.3f; m->hy = 0.33f; m->hz = 2.8f; m->tx = 0.0f; m->ty = 0.62f;
 }
 
 void cars_models_init(void)
 {
-    void (*b[NUM_BODIES])(void) = { build_hornet, build_thunder, build_baja, build_apex };
-    for (int i = 0; i < NUM_BODIES; i++) { cur = &models[i]; cur->n = 0; b[i](); }
+    void (*b[NUM_BODIES])(void) = { build_comet, build_viper, build_titan, build_future88 };
+    for (int i = 0; i < NUM_BODIES; i++) { cur = &models[i]; cur->n = 0; b[i](); smooth_normals(cur); }
 }
 
 /* ------------------------------------------------------------------ */
@@ -268,7 +328,7 @@ static void make_xf(Xf *x, float px, float py, float pz, float h, float pitch, f
 }
 
 typedef struct {
-    float sun[3], sunc[3], amb[3], half[3];
+    float sun[3], sunc[3], amb[3], half[3], view[3];
     float lx[3], lc[3];          /* the strongest nearby lamp (night) */
     int night, braking;
     uint32_t paint, paint2;
@@ -293,6 +353,7 @@ static uint32_t mat_albedo(const Shade *S, int m, int *emis, int *shiny)
     case M_SEAT: return 0x2E3038FFu;
     case M_HELMET: *shiny = 1; return 0xF4F4F4FFu;
     case M_AMBER: *emis = 1; return S->night ? 0xFFE8A0FFu : 0xF2E2A8FFu;
+    case M_THRUST: *emis = 1; return 0x9AF0FFFFu;
     }
     return 0xFF00FFFFu;
 }
@@ -320,6 +381,14 @@ static uint32_t shade(const Shade *S, const float *n, int m)
         sp *= sp; sp *= sp; sp *= sp;                    /* ^8 */
         float k = (shiny == 2 ? 0.55f : 0.3f) * (S->night ? 0.5f : 1.0f);
         r += sp * k * S->sunc[0] + sp * 0.1f; g += sp * k * S->sunc[1] + sp * 0.1f; b += sp * k * S->sunc[2] + sp * 0.1f;
+        /* a broad soft sheen and a rim of sky light at grazing angles: the glossy toy look */
+        float bs = n[0] * S->half[0] + n[1] * S->half[1] + n[2] * S->half[2];
+        bs = bs < 0 ? 0 : bs * bs;
+        r += bs * 0.12f; g += bs * 0.12f; b += bs * 0.11f;
+        float nv = n[0] * S->view[0] + n[1] * S->view[1] + n[2] * S->view[2];
+        float rim = 1.0f - (nv < 0 ? 0 : nv);
+        rim = rim * rim * rim * 0.45f;
+        r += rim * 0.75f; g += rim * 0.85f; b += rim * 1.0f;
         /* a cool sky reflection on upward faces (the "toy car lacquer" look) */
         float up = n[1] > 0 ? n[1] : 0;
         r += up * 0.03f; g += up * 0.035f; b += up * 0.05f;
@@ -340,6 +409,7 @@ static void setup_shade(Shade *S, float px, float py, float pz, int night)
     vx /= vl; vy /= vl; vz /= vl;
     float hx = S->sun[0] + vx, hy = S->sun[1] + vy, hz = S->sun[2] + vz, hl = sqrtf(hx * hx + hy * hy + hz * hz);
     S->half[0] = hx / hl; S->half[1] = hy / hl; S->half[2] = hz / hl;
+    S->view[0] = vx; S->view[1] = vy; S->view[2] = vz;
     S->night = night;
     S->lc[0] = S->lc[1] = S->lc[2] = 0; S->lx[0] = 0; S->lx[1] = 1; S->lx[2] = 0;
     if (night) {
@@ -368,61 +438,36 @@ static void draw_model(const Model *M, const Xf *X, const Shade *S)
 {
     for (int i = 0; i < M->n; i++) {
         const MTri *t = &M->t[i];
-        float n[3], a[3], b[3], c[3];
-        xf_dir(X, t->n, n);
-        uint32_t col = shade(S, n, t->m);
-        if (!col) continue;
-        xf_pt(X, t->p[0], a); xf_pt(X, t->p[1], b); xf_pt(X, t->p[2], c);
-        r3d_tri3(a[0], a[1], a[2], col, b[0], b[1], b[2], col, c[0], c[1], c[2], col);
-    }
-}
-
-/* one wheel: an octagonal drum on the local x axis; the rim spins with `rot`, `steer` turns it */
-static void draw_wheel(const Model *M, const Xf *X, const Shade *S, float sx, float sz, float rot, float steer, float drop)
-{
-    const int N = 8;
-    float r = M->wr, hw = M->ww * 0.5f, cy = M->wy - drop;
-    float cs = cosf(steer), ss = sinf(steer);
-    float side = sx > 0 ? 1.0f : -1.0f;
-    float rim[N][3], tin[N][3], tout[N][3], hub[3];
-    for (int i = 0; i < N; i++) {
-        float a = rot + (float)i / (float)N * TAU;
-        float ly = cosf(a) * r, lz = sinf(a) * r;
-        /* local wheel frame: x = axle, then steered about y */
-        float pi[3] = { -hw * side, ly, lz }, po[3] = { hw * side, ly, lz }, pr[3] = { hw * side + 0.02f * side, ly * 0.62f, lz * 0.62f };
-        float *outs[3] = { tin[i], tout[i], rim[i] };
-        float *ins[3] = { pi, po, pr };
-        for (int k = 0; k < 3; k++) {
-            float x = ins[k][0], z = ins[k][2];
-            float q[3] = { sx + x * cs + z * ss, cy + ins[k][1], sz - x * ss + z * cs };
-            xf_pt(X, q, outs[k]);
+        float a[3], b[3], c[3], n0[3], n1[3], n2[3];
+        xf_dir(X, t->vn[0], n0); xf_dir(X, t->vn[1], n1); xf_dir(X, t->vn[2], n2);
+        uint32_t c0, c1, c2;
+        if (S->livery == LIVERY_SIGNATURE && (t->m == M_PAINT || t->m == M_PAINT_LO || t->m == M_PAINT_ROOF || t->m == M_STRIPE)) {
+            /* LIQUID SILVER: polished metal - cool blue sky reflections up top, darker steel low down, a sharp sheen */
+            uint32_t cc[3];
+            for (int k = 0; k < 3; k++) {
+                const float *nn = k == 0 ? n0 : (k == 1 ? n1 : n2);
+                float dl = nn[0] * S->sun[0] + nn[1] * S->sun[1] + nn[2] * S->sun[2];
+                dl = dl < 0 ? 0 : dl;
+                float up = nn[1] > 0 ? nn[1] : 0;
+                float sp = nn[0] * S->half[0] + nn[1] * S->half[1] + nn[2] * S->half[2];
+                sp = sp < 0 ? 0 : sp; sp *= sp; sp *= sp; sp *= sp;
+                uint32_t base = t->m == M_PAINT_ROOF ? 0x5A6270FFu : (t->m == M_PAINT_LO ? 0x7A828EFFu : 0xB4BCC8FFu);
+                if (t->m == M_STRIPE) base = 0x3AC8FFFFu;
+                uint32_t col = col_scale(base, 0.5f + 0.45f * dl + 0.2f * up);
+                col = col_mix(col, 0x9AD8FFFFu, up * 0.18f);                       /* the sky in the metal */
+                if (S->night) col = col_mix(col, 0x2A8AFFFFu, 0.22f);               /* neon spill at night */
+                col = col_mix(col, 0xFFFFFFFFu, sp * 0.55f);
+                cc[k] = col;
+            }
+            c0 = cc[0]; c1 = cc[1]; c2 = cc[2];
+        } else {
+            c0 = shade(S, n0, t->m);
+            if (!c0) continue;
+            c1 = shade(S, n1, t->m); c2 = shade(S, n2, t->m);
         }
+        xf_pt(X, t->p[0], a); xf_pt(X, t->p[1], b); xf_pt(X, t->p[2], c);
+        r3d_tri3(a[0], a[1], a[2], c0, b[0], b[1], b[2], c1, c[0], c[1], c[2], c2);
     }
-    float hl[3] = { sx + hw * side * cs + 0.04f * side, cy, sz - hw * side * ss };
-    xf_pt(X, hl, hub);
-    float up[3] = { 0, 1, 0 }, nn[3];
-    xf_dir(X, up, nn);
-    for (int i = 0; i < N; i++) {
-        int j = (i + 1) % N;
-        /* tread: normal points out from the axle */
-        float mid[3] = { (tout[i][0] + tout[j][0]) * 0.5f, (tout[i][1] + tout[j][1]) * 0.5f, (tout[i][2] + tout[j][2]) * 0.5f };
-        float axis[3] = { hub[0], hub[1], hub[2] };
-        float n[3] = { mid[0] - axis[0], mid[1] - axis[1], mid[2] - axis[2] };
-        float l = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) + 1e-6f;
-        n[0] /= l; n[1] /= l; n[2] /= l;
-        uint32_t ct = shade(S, n, M_TIRE);
-        r3d_tri3(tin[i][0], tin[i][1], tin[i][2], ct, tin[j][0], tin[j][1], tin[j][2], ct, tout[j][0], tout[j][1], tout[j][2], ct);
-        r3d_tri3(tin[i][0], tin[i][1], tin[i][2], ct, tout[j][0], tout[j][1], tout[j][2], ct, tout[i][0], tout[i][1], tout[i][2], ct);
-        /* outer side wall and the rim with alternating spokes */
-        float sn[3] = { X->r[0] * side, X->r[1] * side, X->r[2] * side };
-        uint32_t cw = shade(S, sn, M_TIRE);
-        r3d_tri3(tout[i][0], tout[i][1], tout[i][2], cw, tout[j][0], tout[j][1], tout[j][2], cw, rim[j][0], rim[j][1], rim[j][2], cw);
-        r3d_tri3(tout[i][0], tout[i][1], tout[i][2], cw, rim[j][0], rim[j][1], rim[j][2], cw, rim[i][0], rim[i][1], rim[i][2], cw);
-        uint32_t cr = shade(S, sn, M_RIM);
-        if (i & 1) cr = col_scale(cr, 0.55f);
-        r3d_tri3(hub[0], hub[1], hub[2], cr, rim[i][0], rim[i][1], rim[i][2], cr, rim[j][0], rim[j][1], rim[j][2], cr);
-    }
-    (void)nn;
 }
 
 static void draw_shadow(const Model *M, const Xf *X, float gy, int night, float strength)
@@ -474,7 +519,8 @@ void car_draw(const Car *c, float t, int night, float shadow)
     const Model *M = &models[c->body];
     Xf X;
     float gy = c->y;
-    make_xf(&X, c->x, c->y + c->air + c->susp, c->z, c->h, c->pitch, c->roll);
+    float lift = 0.7f + 0.09f * sinf(t * 3.2f + (float)c->number * 1.7f);
+    make_xf(&X, c->x, c->y + c->air + lift, c->z, c->h, c->pitch * 0.6f, c->roll * 1.8f + c->steer_vis * -0.06f);
     Shade S;
     setup_shade(&S, c->x, c->y, c->z, night);
     S.paint = c->paint; S.paint2 = c->paint2; S.livery = c->livery;
@@ -484,11 +530,43 @@ void car_draw(const Car *c, float t, int night, float shadow)
     if (shadow > 0) draw_shadow(M, &G, gy, night, shadow);
     r3d_mode(RM_OPAQUE);
     draw_model(M, &X, &S);
-    float st = c->steer_vis * 0.45f;
-    draw_wheel(M, &X, &S, -M->wx, M->wz, c->wheel_rot, -st, c->susp * 0.5f);
-    draw_wheel(M, &X, &S, M->wx, M->wz, c->wheel_rot, -st, c->susp * 0.5f);
-    draw_wheel(M, &X, &S, -M->wx, -M->wz, c->wheel_rot, 0, c->susp * 0.5f);
-    draw_wheel(M, &X, &S, M->wx, -M->wz, c->wheel_rot, 0, c->susp * 0.5f);
+    /* the hover field: a soft glow on the deck under the car */
+    r3d_mode(RM_ADD);
+    if (c->livery == LIVERY_SIGNATURE) {
+        r3d_blob(c->x, gy + 0.08f, c->z, M->wid * 1.0f, M->len * 0.72f, -c->h, 0x2A9AFFD0u, 0x2A9AFF00u);
+        r3d_blob(c->x, gy + 0.09f, c->z, M->wid * 0.45f, M->len * 0.4f, -c->h, 0xA8E8FFA0u, 0xA8E8FF00u);
+        if (c->boost_t > 0) {
+            /* PRISM DRIVE: a ribbon of spectrum light streaming off the tail, and a shock ring */
+            float fx = sinf(c->h), fz = cosf(c->h), rx = -fz, rz = fx;
+            for (int i = 0; i < 26; i++) {
+                float d = 2.4f + (float)i * 0.75f, w = sinf(t * 9.0f - (float)i * 0.45f) * 0.25f * (float)i / 26.0f;
+                uint32_t hc = col_hsv(0.5f + (float)i / 26.0f * 0.18f, 0.55f + 0.4f * (float)i / 26.0f, 1.0f, (int)(150.0f * (1.0f - (float)i / 26.0f)));
+                for (int s = -1; s <= 1; s += 2) {
+                    float px = c->x - fx * d + rx * ((float)s * 0.55f + w), pz = c->z - fz * d + rz * ((float)s * 0.55f + w);
+                    r3d_glow(px, gy + 1.0f, pz, 0.6f + (float)i * 0.025f, hc);
+                }
+            }
+            float ring = fmodf(t * 1.6f, 1.0f), rr = 2.0f + ring * 7.0f;
+            for (int i = 0; i < 24; i++) {
+                float a = (float)i / 24.0f * 6.2831853f;
+                r3d_glow(c->x + cosf(a) * rr, gy + 0.3f, c->z + sinf(a) * rr, 0.6f, col_hsv(0.55f + 0.08f * sinf((float)i), 0.7f, 1.0f, (int)(130.0f * (1.0f - ring))));
+            }
+        }
+    } else
+    r3d_blob(c->x, gy + 0.08f, c->z, M->wid * 0.75f, M->len * 0.6f, -c->h, 0x5AD8FFB0u, 0x5AD8FF00u);
+    r3d_blob(c->x, gy + 0.09f, c->z, M->wid * 0.35f, M->len * 0.35f, -c->h, 0xC8F4FF90u, 0xC8F4FF00u);
+    float th = 0.45f + 0.55f * c->in.throttle;
+    for (int s = -1; s <= 1; s += 2) {
+        float e0[3] = { (float)s * (M->tx > 0.1f ? M->tx : 0.0f), M->ty, -M->len * 0.45f - 0.1f };
+        float w0[3];
+        xf_pt(&X, e0, w0);
+        r3d_glow(w0[0], w0[1], w0[2], 0.5f + 0.3f * th, 0x8AE8FF80u);
+        float e1[3] = { e0[0], e0[1], e0[2] - 1.2f * th }, w1[3];
+        xf_pt(&X, e1, w1);
+        r3d_glow(w1[0], w1[1], w1[2], 0.45f * th, 0x3A8AFF90u);
+        if (M->tx <= 0.1f) break;
+    }
+    r3d_mode(RM_OPAQUE);
     /* glows: headlights at night, brake lights, nitro exhaust */
     r3d_mode(RM_ADD);
     float hp[2][3], tp[2][3];
@@ -496,7 +574,7 @@ void car_draw(const Car *c, float t, int night, float shadow)
         float sx = s ? M->hx : -M->hx;
         float a[3] = { sx, M->hy, M->hz + 0.05f }, b[3] = { sx, M->ty, -M->hz - 0.05f };
         xf_pt(&X, a, hp[s]); xf_pt(&X, b, tp[s]);
-        if (night) r3d_glow(hp[s][0], hp[s][1], hp[s][2], 1.3f, 0xFFF4D8B0u);
+        if (night) r3d_glow(hp[s][0], hp[s][1], hp[s][2], 0.8f, 0xDDF4FF60u);
         if (S.braking || night) r3d_glow(tp[s][0], tp[s][1], tp[s][2], S.braking ? 1.2f : 0.7f, S.braking ? 0xFF2A20C0u : 0xFF202080u);
     }
     if (c->boost_t > 0 || c->mini_t > 0) {
@@ -545,8 +623,8 @@ void car_headlights(const Car *c)
                 uint32_t cc[4];
                 float ks[4] = { kk[i][j], kk[i + 1][j], kk[i + 1][j + 1], kk[i][j + 1] };
                 for (int q = 0; q < 4; q++) {
-                    if (pass == 0) { int v = 128 + (int)(ks[q] * 127.0f); cc[q] = RGBA(v, v, v - 6, 255); }
-                    else cc[q] = RGBA(255, 236, 200, (int)(ks[q] * 70.0f));
+                    if (pass == 0) { int v = 128 + (int)(ks[q] * 50.0f); cc[q] = RGBA(v, v, v, 255); }
+                    else cc[q] = RGBA(200, 236, 255, (int)(ks[q] * 30.0f));
                 }
                 r3d_tri3(px[i][j], py[i][j], pz[i][j], cc[0], px[i + 1][j], py[i + 1][j], pz[i + 1][j], cc[1], px[i + 1][j + 1], py[i + 1][j + 1], pz[i + 1][j + 1], cc[2]);
                 r3d_tri3(px[i][j], py[i][j], pz[i][j], cc[0], px[i + 1][j + 1], py[i + 1][j + 1], pz[i + 1][j + 1], cc[2], px[i][j + 1], py[i][j + 1], pz[i][j + 1], cc[3]);
@@ -558,7 +636,7 @@ void car_draw_showroom(int body, uint32_t paint, uint32_t paint2, int livery, fl
 {
     const Model *M = &models[body];
     Xf X;
-    make_xf(&X, x, y, z, yaw, 0, 0);
+    make_xf(&X, x, y + 0.7f, z, yaw, 0, 0);
     Shade S;
     S.sun[0] = -0.45f; S.sun[1] = 0.75f; S.sun[2] = 0.48f;
     float sl = sqrtf(S.sun[0] * S.sun[0] + S.sun[1] * S.sun[1] + S.sun[2] * S.sun[2]);
@@ -568,14 +646,21 @@ void car_draw_showroom(int body, uint32_t paint, uint32_t paint2, int livery, fl
     float vx = r_cam.ex - x, vy = r_cam.ey - y, vz = r_cam.ez - z, vl = sqrtf(vx * vx + vy * vy + vz * vz);
     float hx = S.sun[0] + vx / vl, hy = S.sun[1] + vy / vl, hz = S.sun[2] + vz / vl, hl = sqrtf(hx * hx + hy * hy + hz * hz);
     S.half[0] = hx / hl; S.half[1] = hy / hl; S.half[2] = hz / hl;
+    S.view[0] = vx / vl; S.view[1] = vy / vl; S.view[2] = vz / vl;
     S.night = 0; S.braking = 0; S.paint = paint; S.paint2 = paint2; S.livery = livery;
+    S.view[0] = vx / vl; S.view[1] = vy / vl; S.view[2] = vz / vl;
     r3d_mode(RM_OPAQUE);
     draw_model(M, &X, &S);
     float rot = t * 3.0f;
-    draw_wheel(M, &X, &S, -M->wx, M->wz, rot, 0, 0);
-    draw_wheel(M, &X, &S, M->wx, M->wz, rot, 0, 0);
-    draw_wheel(M, &X, &S, -M->wx, -M->wz, rot, 0, 0);
-    draw_wheel(M, &X, &S, M->wx, -M->wz, rot, 0, 0);
+    (void)rot;
+    r3d_mode(RM_ADD);
+    r3d_blob(x, 0.05f, z, M->wid * (livery == LIVERY_SIGNATURE ? 1.1f : 0.8f), M->len * 0.7f, -yaw, livery == LIVERY_SIGNATURE ? 0x2A9AFFD0u : 0x5AD8FFA0u, 0x00000000u);
+    for (int s = -1; s <= 1; s += 2) {
+        float e[3] = { (float)s * M->tx, M->ty, -M->len * 0.45f - 0.1f }, w[3];
+        xf_pt(&X, e, w);
+        r3d_glow(w[0], w[1], w[2], 0.7f, livery == LIVERY_SIGNATURE ? 0x6AC8FFC0u : 0x8AE8FFC0u);
+    }
+    r3d_mode(RM_OPAQUE);
 }
 
 /* ------------------------------------------------------------------ */
@@ -599,24 +684,18 @@ void car_place(Car *c, float dist, float lat)
     c->rpm = 0.15f; c->gear = 1;
 }
 
-#define GEARS 5
-static const float GEAR_TOP[GEARS] = { 0.24f, 0.42f, 0.62f, 0.82f, 1.06f };
 
+/* the turbine's spin (0..1+): follows the speed, spools up with the throttle and the boost - no gears */
 static void update_engine(Car *c, float dt, float vmax_eff)
 {
     float v = c->speed / (vmax_eff > 1 ? vmax_eff : 1);
-    /* automatic gearbox: shift up near the top of each gear, down when it falls well below */
-    int g = c->gear;
-    if (c->shift_t > 0) c->shift_t -= dt;
-    if (g < GEARS && v > GEAR_TOP[g - 1] * 0.97f && c->shift_t <= 0) { c->gear++; c->shift_t = 0.25f; c->ev_shift = 1; if (c->in.throttle > 0.5f && (c->number & 1)) c->ev_backfire = 1; }
-    else if (g > 1 && v < GEAR_TOP[g - 2] * 0.72f) { c->gear--; c->shift_t = 0.15f; }
-    float lo = g > 1 ? GEAR_TOP[g - 2] * 0.55f : 0.0f, hi = GEAR_TOP[g - 1];
-    float target = 0.18f + 0.82f * sat((v - lo) / (hi - lo));
-    if (c->drifting) target += 0.12f;                      /* wheels spinning up in the slide */
-    if (c->in.throttle > 0.1f && c->speed < 4.0f) target = fmaxf(target, 0.35f + 0.4f * c->in.throttle);
-    if (c->in.throttle < 0.1f) target *= 0.85f;
-    target = clampf(target, 0.12f, 1.08f);
-    c->rpm += (target - c->rpm) * damp(c->shift_t > 0 ? 18.0f : 9.0f, dt);
+    float target = 0.22f + 0.7f * sat(v) + 0.12f * c->in.throttle;
+    if (c->boost_t > 0) target += 0.18f;
+    else if (c->mini_t > 0) target += 0.08f;
+    if (c->drifting) target += 0.05f;
+    target = clampf(target, 0.15f, 1.2f);
+    c->rpm += (target - c->rpm) * damp(c->in.throttle > 0.5f ? 5.0f : 3.0f, dt);
+    c->gear = 1;
 }
 
 static void drift_end(Car *c)
@@ -627,7 +706,7 @@ static void drift_end(Car *c)
     if (c->drift_tier > 0) {
         const float mt[4] = { 0, 0.55f, 0.95f, 1.45f }, nb[4] = { 0, 0.18f, 0.35f, 0.6f };
         c->mini_t = fmaxf(c->mini_t, mt[c->drift_tier]);
-        c->nitro = fminf(c->st.tank, c->nitro + nb[c->drift_tier] * (0.8f + 0.2f * c->st.drift));
+        if (c->boost_t <= 0) c->nitro = fminf(1.0f, c->nitro + nb[c->drift_tier] * 0.5f * (0.8f + 0.2f * c->st.drift));
         c->ev_boost = c->drift_tier;
     }
     c->drift_total += c->drift_pts * (1.0f + 0.5f * (float)c->drift_tier);
@@ -639,7 +718,13 @@ static void car_step(Car *c, float dt, int racing)
 {
     const TrackInfo *I = trk.info;
     CarInput *in = &c->in;
-    if (!racing) { in->throttle = 0; in->brake = 1; in->steer = 0; in->drift = 0; in->nitro = 0; in->hop = 0; }
+    if (!racing) {
+        /* on the grid: held in place by the start clamps (no creeping, and never backwards) */
+        in->steer = 0; in->drift = 0; in->nitro = 0; in->hop = 0;
+        c->vx = c->vz = 0; c->w = 0; c->speed = 0; c->slip = 0;
+        c->steer_vis *= 0.9f;
+        return;
+    }
 
     float sh = sinf(c->h), ch = cosf(c->h);
     float fx = sh, fz = ch, rx = -ch, rz = sh;
@@ -649,21 +734,26 @@ static void car_step(Car *c, float dt, int racing)
     /* surface */
     const TSample *s = &trk.s[c->sample];
     float wall = c->lat < 0 ? s->wl : s->wr;
-    c->offroad = fabsf(c->lat) > s->hw + 1.2f;           /* kerbs count as track */
-    float surf = I->grip * (c->offroad ? 0.8f : 1.0f);
+    /* the whole deck races; only the strip against the energy walls drags a little */
+    c->offroad = fabsf(c->lat) > s->hw + 2.6f;
+    float surf = I->grip * (c->offroad ? 0.9f : 1.0f);
     float grip = c->st.grip * surf;
     int airborne = c->air > 0.05f;
 
-    /* nitro */
-    if (in->nitro && c->nitro >= 1.0f && c->boost_t < 1.6f) {
-        c->nitro -= 1.0f;
-        c->boost_t += 1.5f;
+    /* boost: unlimited, but it has to recharge after every use */
+    if (in->nitro && c->nitro >= 1.0f && c->boost_t <= 0) {
+        c->nitro = 0;
+        c->boost_t = BOOST_TIME;
         c->ev_nitro = 1;
     }
+    if (c->boost_t <= 0 && c->nitro < 1.0f) {
+        c->nitro += dt / c->st.recharge;
+        if (c->nitro >= 1.0f) { c->nitro = 1.0f; c->ev_ready = 1; }
+    }
     float npow = c->st.npow;
-    float vmax = c->st.vmax * (c->offroad ? 0.66f : 1.0f);
-    float accel = c->st.accel * (c->offroad ? 0.75f : 1.0f);
-    if (c->boost_t > 0) { vmax *= 1.2f + 0.035f * npow; accel += 16.0f + 3.2f * npow; c->boost_t -= dt; if (c->boost_t < 0) c->boost_t = 0; }
+    float vmax = c->st.vmax * (c->offroad ? 0.9f : 1.0f);
+    float accel = c->st.accel * (c->offroad ? 0.9f : 1.0f);
+    if (c->boost_t > 0) { vmax *= 1.22f + 0.035f * npow; accel += 18.0f + 3.2f * npow; c->boost_t -= dt; if (c->boost_t < 0) c->boost_t = 0; }
     if (c->mini_t > 0) { vmax *= 1.1f; accel += 12.0f; c->mini_t -= dt; if (c->mini_t < 0) c->mini_t = 0; }
     if (c->start_boost > 0) { accel += 14.0f; vmax *= 1.08f; c->start_boost -= dt; }
     if (c->slipstream > 0.5f) vmax *= 1.04f;
@@ -687,7 +777,7 @@ static void car_step(Car *c, float dt, int racing)
             else if (in->throttle < 0.1f) { vf -= 9.0f * dt; if (vf < -9.0f) vf = -9.0f; }
         }
         if (in->throttle < 0.02f && in->brake < 0.05f) vf -= vf * 0.35f * dt + signf(vf) * 0.6f * dt;
-        if (c->offroad) vf -= vf * 0.6f * dt;
+        if (c->offroad) vf -= vf * 0.25f * dt;
         if (vf > vmax * 1.3f) vf = vmax * 1.3f;
         c->vx = fx * vf + rx * vl;
         c->vz = fz * vf + rz * vl;
@@ -786,8 +876,9 @@ static void car_step(Car *c, float dt, int racing)
         c->lat = sg * lim;
         float vn = (c->vx * s->nx + c->vz * s->nz) * sg;
         if (vn > 0) {
-            c->vx -= s->nx * sg * vn * 1.3f; c->vz -= s->nz * sg * vn * 1.3f;
-            float fr = 1.0f - fminf(0.35f, vn * 0.03f);
+            /* the energy wall pushes back: a bounce that keeps most of the speed */
+            c->vx -= s->nx * sg * vn * 1.45f; c->vz -= s->nz * sg * vn * 1.45f;
+            float fr = 1.0f - fminf(0.2f, vn * 0.018f);
             c->vx *= fr; c->vz *= fr;
             c->impact = vn;
             if (vn > 2.5f && c->wall_t <= 0) { c->ev_impact = 1; c->ev_impact_v = vn; c->wall_t = 0.25f; }
@@ -802,6 +893,14 @@ static void car_step(Car *c, float dt, int racing)
         c->scrape *= 0.8f;
     }
     if (c->wall_t > 0) c->wall_t -= dt;
+
+    /* boost pads */
+    if (c->pad_t > 0) c->pad_t -= dt;
+    if (c->air <= 0.05f && c->pad_t <= 0 && track_is_boost(c->sample) && fabsf(c->lat - track_pad_lat(c->sample)) < 2.8f) {
+        c->mini_t = fmaxf(c->mini_t, 1.0f);
+        c->pad_t = 0.6f;
+        c->ev_pad = 1;
+    }
 
     /* ground */
     {
@@ -895,7 +994,7 @@ void cars_step(float dt, int racing)
             float along = dx * sx + dz * sz, side = fabsf(dx * sz - dz * sx);
             if (along > 4.0f && along < 20.0f && side < 2.2f && c->speed > 18.0f) in_tow = 1;
         }
-        if (in_tow) { c->slipstream += dt; c->nitro = fminf(c->st.tank, c->nitro + 0.06f * dt); }
+        if (in_tow) { c->slipstream += dt; if (c->boost_t <= 0) c->nitro = fminf(1.0f, c->nitro + 0.12f * dt); }
         else c->slipstream = 0;
     }
 }
@@ -971,7 +1070,7 @@ void car_ai_input(Car *c, float dt)
     c->in.nitro = 0;
     c->ai_nitro_t -= dt;
     if (c->nitro >= 1.0f && c->ai_nitro_t <= 0 && vt > speed + 8.0f && fabsf(steer) < 0.2f) {
-        c->in.nitro = 1; c->ai_nitro_t = 4.0f + 3.0f * (1.0f - c->skill);
+        c->in.nitro = 1; c->ai_nitro_t = 1.0f + 6.0f * (1.0f - c->skill);
     }
     c->in.hop = 0;
 }

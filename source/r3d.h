@@ -24,18 +24,24 @@ enum {
     RM_ALPHA,      /* alpha blend, depth test, no depth write */
     RM_ADD,        /* additive (src * alpha + dst), depth test, no write */
     RM_MUL2,       /* dst = 2 * src * dst (lighting), depth test, no write */
+    RM_GROUND,     /* opaque, plus a world-mapped detail texture */
     RM_COUNT
 };
 
 typedef struct { float x, y, z; uint32_t c; } RV;      /* c = 0xRRGGBBAA */
 
-enum { RC_TRIS, RC_MESH, RC_2D, RC_POST };
+enum { RC_TRIS, RC_MESH, RC_2D, RC_POST, RC_TEXT };
 typedef struct { uint8_t type, mode; uint16_t mesh; int start, count; } RCmd;
 
 #define R_MAX_VTX  120000
 #define R_MAX_CMD  4096
 
 extern RV   *r_v;            /* dynamic vertices */
+typedef struct { float x, y, u, v; uint32_t c; } TV;     /* textured 2D vertex (the font atlas) */
+#define R_MAX_TVTX 60000
+extern TV   *r_tv;
+extern int   r_ntv;
+void r3d_text_tri(const TV *a, const TV *b, const TV *c);
 extern int   r_nv;
 extern RCmd  r_cmd[R_MAX_CMD];
 extern int   r_ncmd;
@@ -55,6 +61,16 @@ extern RCam r_cam;
 
 /* tilt-shift (miniature) post effect: blur strength at the top / bottom of the screen */
 extern float r_post_top, r_post_bot;
+/* the film look: RGB split strength (1 = normal), set per frame */
+extern float r_fx_split;
+
+/* textures shared by the platforms: the ground's detail (asphalt grain and mottling; 128 = no change, the
+ * renderer doubles it) and the film grain */
+#define R_DETAIL_SIZE 256
+#define R_DETAIL_TEXELS_PER_M 1.6f
+#define R_GRAIN_SIZE 128
+void r3d_make_detail(uint8_t *out);           /* R_DETAIL_SIZE^2 bytes */
+void r3d_make_grain(uint8_t *out);            /* R_GRAIN_SIZE^2 bytes, mean 128 */
 
 /* colour helpers */
 static inline uint32_t RGBA(int r, int g, int b, int a)

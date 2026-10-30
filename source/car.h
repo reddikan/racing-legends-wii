@@ -1,5 +1,5 @@
 /*
- * RACING LEGENDS - cars: the models, the arcade drift handling, nitro, collisions and the AI drivers.
+ * RACING LEGENDS - hover craft: the models, the drift handling, the boost, collisions and the AI pilots.
  */
 #ifndef CAR_H
 #define CAR_H
@@ -7,11 +7,14 @@
 #include <stdint.h>
 
 #define NUM_BODIES 4
+#define BODY_FUTURE88 3              /* the hidden craft */
+#define LIVERY_SIGNATURE 4           /* its liquid silver + neon blue finish */
 #define NUM_PAINTS 12
 #define MAX_CARS 8
 
-enum { UP_ENGINE, UP_TURBO, UP_TIRES, UP_TANK, UP_NITRO, UP_DRIFT, NUM_UPGRADES };
+enum { UP_ENGINE, UP_TURBO, UP_GRIP, UP_RECHARGE, UP_BOOST, UP_DRIFT, NUM_UPGRADES };
 #define UP_MAX 5
+#define BOOST_TIME 1.6f            /* seconds a boost lasts */
 
 extern const char *BODY_NAME[NUM_BODIES];
 extern const uint32_t PAINT[NUM_PAINTS];
@@ -21,8 +24,8 @@ typedef struct {
     float vmax;        /* top speed (m/s) */
     float accel;       /* launch acceleration (m/s^2) */
     float grip;        /* lateral grip (m/s^2) */
-    float tank;        /* nitro canisters */
-    float npow;        /* nitro power level 0..5 */
+    float recharge;    /* seconds for the boost to recharge from empty */
+    float npow;        /* boost power level 0..5 */
     float drift;       /* drift-charge rate multiplier */
 } CarStats;
 
@@ -31,7 +34,7 @@ void car_stats_from_levels(const uint8_t *lv, CarStats *st);
 typedef struct {
     float throttle, brake, steer;   /* 0..1, 0..1, -1..1 (+ = right) */
     int drift;                      /* L held */
-    int nitro;                      /* A pressed (edge) */
+    int nitro;                      /* boost pressed (edge) */
     int hop;                        /* B pressed (edge) */
 } CarInput;
 
@@ -50,7 +53,8 @@ typedef struct {
     int   lap, cp, finished, place;
     float progress;                  /* metres raced */
     float race_time, finish_time, lap_start, best_lap, last_lap;
-    float nitro, boost_t, mini_t, start_boost;
+    float nitro;                     /* boost charge 0..1: full = ready */
+    float boost_t, mini_t, start_boost, pad_t;
     int   drifting, drift_dir, drift_tier, drift_latch;
     float drift_charge, drift_t, drift_pts, drift_total, drift_best, straight_t;
     float slip;                      /* slip angle (rad) */
@@ -63,7 +67,7 @@ typedef struct {
     int   ai; float skill, lane, ai_nitro_t, ai_avoid, ai_drift_t;
     CarInput in;
     /* events for sound / effects (set during the step, cleared by the game) */
-    int ev_impact, ev_nitro, ev_boost, ev_land, ev_tier, ev_shift, ev_backfire, ev_horn;
+    int ev_impact, ev_nitro, ev_boost, ev_land, ev_tier, ev_shift, ev_backfire, ev_horn, ev_pad, ev_ready;
     float ev_impact_v;
 } Car;
 
